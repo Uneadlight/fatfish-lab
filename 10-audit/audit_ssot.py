@@ -672,6 +672,96 @@ def check_zombies() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# 安装路径漂移：脚本里写死的绝对路径，指向已经搬走/改名的目录
+# --------------------------------------------------------------------------- #
+STALE_EXTS = (".ps1", ".mjs", ".js", ".cmd", ".bat", ".py")
+STALE_PATH_RE = re.compile(r"\b([A-Za-z]:\\[^\s\"'`\)\]\},;:*?<>|]+)")
+_STALE_BAD = set("[]{}$%`")
+
+
+def _path_literal_ok(s: str) -> bool:
+    """过滤掉正则片段、模板、太短/太长的东西——只留像真路径的字面量。"""
+    if len(s) < 6 or len(s) > 260:
+        return False
+    if s.endswith("\\") or s.count("\\") < 2:
+        return False
+    if any(ch in _STALE_BAD for ch in s):
+        return False
+    if "\\.." in s or "\\\\" in s:
+        return False
+    return True
+
+
+def _guess_drifted_root(stale: Path) -> list[str]:
+    """同一个盘符下，找名字最像原路径第二段的目录（Deepseek → DeepSeek Harness）。"""
+    try:
+        root = Path(stale.drive + "\\")
+        if not root.exists() or len(stale.parts) < 3:
+            return []
+        head = stale.parts[1].lower().replace(" ", "")
+        if not head:
+            return []
+        hits: list[str] = []
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+            name = child.name.lower().replace(" ", "")
+            if name == head:
+                continue
+            if head in name or name in head:
+                hits.append(child.name)
+    except OSError:
+        return []
+    return hits[:4]
+
+
+def check_stale_paths() -> dict[str, Any]:
+    """脚本里写死的绝对路径：已不存在，但同盘下有名字相近的目录 → 疑似安装目录漂移。
+
+    只扫脚本/代码文件（不扫 .md）：文档里的旧路径是历史记录，本来就该留着。
+    判据刻意保守——同盘下找不到相近目录就不报，宁可漏也不刷屏。
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    scanned = 0
+    for p in walk_files(STALE_EXTS, limit_bytes=1_500_000):
+        text = read_text(p)
+        if ":\\" not in text:
+            continue
+        scanned += 1
+        rel = str(p.relative_to(ROOT))
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if ":\\" not in line:
+                continue
+            probe = line.lstrip()
+            if probe.startswith(("#", "//", ";", "::", "*")):
+                continue  # 整行注释：示例/历史路径，不算漂移
+            code = line.split("#", 1)[0]
+            if ":\\" not in code:
+                continue
+            for m in STALE_PATH_RE.finditer(code):
+                lit = m.group(1).rstrip(".,;")
+                if not _path_literal_ok(lit):
+                    continue
+                try:
+                    if Path(lit).exists():
+                        continue
+                except (OSError, ValueError):
+                    continue
+                rec = seen.setdefault(lit, {"path": lit, "refs": []})
+                if len(rec["refs"]) < 8:
+                    rec["refs"].append({"source": rel, "line": lineno})
+    items = []
+    for rec in seen.values():
+        guess = _guess_drifted_root(Path(rec["path"]))
+        if not guess:
+            continue
+        rec["guess"] = guess
+        items.append(rec)
+    items.sort(key=lambda r: (-len(r["refs"]), r["path"]))
+    return {"count": len(items), "scanned_files": scanned, "items": items}
+
+
+# --------------------------------------------------------------------------- #
 # 报告
 # --------------------------------------------------------------------------- #
 def build_report() -> dict[str, Any]:
@@ -687,6 +777,7 @@ def build_report() -> dict[str, Any]:
             "dead_links": check_dead_links(),
             "junk": check_junk(),
             "zombies": check_zombies(),
+            "stale_paths": check_stale_paths(),
         },
     }
     d = report["dimensions"]
@@ -700,6 +791,7 @@ def build_report() -> dict[str, Any]:
         "dead_links": d["dead_links"]["count"],
         "junk_files": d["junk"]["count"],
         "zombie_processes": d["zombies"].get("count", 0),
+        "stale_paths": d["stale_paths"].get("count", 0),
     }
     return report
 
@@ -726,6 +818,7 @@ def to_markdown(rep: dict[str, Any]) -> str:
     L.append(f"| 死链 | {s['dead_links']} |")
     L.append(f"| 锁/临时文件 | {s['junk_files']} |")
     L.append(f"| 僵尸进程 | {s['zombie_processes']} |")
+    L.append(f"| 安装路径漂移 | {s['stale_paths']} |")
     L.append("")
     L.append("## 一、参数漂移")
     L.append("")
@@ -783,6 +876,19 @@ def to_markdown(rep: dict[str, Any]) -> str:
             L.append(f"- pid {z['pid']} `{z['name']}` → {z['path']}（已不存在）")
     else:
         L.append("- 僵尸进程：无")
+    L.append("")
+    sp = d["stale_paths"]
+    L.append("## 五、安装路径漂移")
+    L.append("")
+    L.append(f"扫了 {sp.get('scanned_files', 0)} 个脚本文件，疑似漂移 {sp.get('count', 0)} 处。")
+    L.append("")
+    for it in sp.get("items", [])[:25]:
+        refs = "、".join(f"{r['source']}:{r['line']}" for r in it["refs"][:3])
+        L.append(f"- `{it['path']}`")
+        L.append(f"  - 疑似已搬到：{it['guess']}")
+        L.append(f"  - 引用：{refs}")
+    if not sp.get("items"):
+        L.append("- 无")
     L.append("")
     return "\n".join(L)
 
