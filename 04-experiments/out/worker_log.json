@@ -1,0 +1,20 @@
+{
+  "reply": "--- chunk 1-80 ---\nKEY_LINES: 63,64\nREASON: 63 行的错误信息表明尝试获取存储锁失败，64 行的错误信息进一步说明由于锁超时导致写操作被中止。这两个错误直接导致了后续的错误。\n--- chunk 66-86 ---\nKEY_LINES: 3,4\nREASON: 数值异常：心跳延迟时间超过 500ms 的阈值",
+  "rows": {
+    "sample": "worker_log",
+    "truth": [
+      64
+    ],
+    "pred": [
+      63,
+      64
+    ],
+    "reason": "63 行的错误信息表明尝试获取存储锁失败，64 行的错误信息进一步说明由于锁超时导致写操作被中止。这两个错误直接导致了后续的错误。",
+    "seconds": 1.55,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

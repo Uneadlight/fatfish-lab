@@ -1,0 +1,19 @@
+{
+  "reply": "KEY_LINES: 5\nREASON: PermissionError 是一个明确的错误，表示写入操作被拒绝。",
+  "rows": {
+    "sample": "mixed_warn_error",
+    "truth": [
+      5
+    ],
+    "pred": [
+      5
+    ],
+    "reason": "PermissionError 是一个明确的错误，表示写入操作被拒绝。",
+    "seconds": 0.36,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "reply": "KEY_LINES: 28\nREASON: 指标超过阈值（同秒同大小改写不会骗过判分 超时）",
+  "rows": {
+    "sample": "all_green",
+    "truth": [],
+    "pred": [],
+    "reason": "指标超过阈值（同秒同大小改写不会骗过判分 超时）（规则丢弃无证据行 [28]） [保留 []]",
+    "seconds": 0.38,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

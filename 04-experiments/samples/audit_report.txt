@@ -1,0 +1,21 @@
+# SSOT 审计报告 2026-10-30
+
+| 维度 | 数量 | 判定 |
+|---|---|---|
+| 文档参数过期 | 1 | WARN |
+| 索引幽灵文件 | 0 | OK |
+| 未声明依赖 | 0 | OK |
+| 死代码候选 | 13 | INFO |
+| 死链 | 2 | WARN |
+| 残留文件 | 0 | OK |
+
+## 明细
+
+- [WARN] `记忆注入字符预算`：代码 60000，文档写 30000（来源 自进化\记忆库优化规则.md:41）
+- [INFO] dead_code `Puppy`（学习计划\01-编程\python\第30课.py）
+- [INFO] dead_code `cleanup_stale_temps`（学习计划\01-编程\tools\clean.py）
+- [WARN] 死链 `D:\work\docs\deepseek.md`（来源 救回手册.md:88）
+- [INFO] dead_code `verify_pair`（学习计划\01-编程\项目3\dedupe.py）
+
+## 结论
+0 项需处理，2 项注意。

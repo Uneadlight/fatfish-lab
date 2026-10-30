@@ -1,0 +1,53 @@
+tests/test_codec.py::test_roundtrip_1000 PASSED
+    [debug] fixture setup ok, tmp=4020
+    [debug] fixture setup ok, tmp=4942
+    [debug] fixture setup ok, tmp=5975
+tests/test_codec.py::test_边界_空串 PASSED
+    [debug] fixture setup ok, tmp=7167
+    [debug] fixture setup ok, tmp=3525
+    [debug] fixture setup ok, tmp=4070
+tests/test_framing.py::test_粘包_100帧 PASSED
+    [debug] fixture setup ok, tmp=1080
+    [debug] fixture setup ok, tmp=8494
+    [debug] fixture setup ok, tmp=2213
+tests/test_rpc.py::test_并发50连接 PASSED
+    [debug] fixture setup ok, tmp=3959
+    [debug] fixture setup ok, tmp=5335
+    [debug] fixture setup ok, tmp=8834
+tests/test_bplus.py::test_随机5000步对照dict PASSED
+    [debug] fixture setup ok, tmp=4308
+    [debug] fixture setup ok, tmp=3120
+    [debug] fixture setup ok, tmp=2393
+tests/test_paged.py::test_查找页读不超过树高 PASSED
+    [debug] fixture setup ok, tmp=2649
+    [debug] fixture setup ok, tmp=8875
+    [debug] fixture setup ok, tmp=4968
+tests/test_router.py::test_隐私标记禁止走云端 PASSED
+    [debug] fixture setup ok, tmp=2192
+    [debug] fixture setup ok, tmp=9136
+    [debug] fixture setup ok, tmp=7459
+tests/test_orchestrator.py::test_同秒同大小改写不会骗过判分 PASSED
+    [debug] fixture setup ok, tmp=9112
+    [debug] fixture setup ok, tmp=1778
+    [debug] fixture setup ok, tmp=3497
+tests/test_guard.py::test_暖机不重复计数 PASSED
+    [debug] fixture setup ok, tmp=4848
+    [debug] fixture setup ok, tmp=2524
+    [debug] fixture setup ok, tmp=2402
+tests/test_judge.py::test_无测试用例判红 PASSED
+    [debug] fixture setup ok, tmp=7797
+    [debug] fixture setup ok, tmp=7108
+    [debug] fixture setup ok, tmp=2179
+tests/test_guard.py::test_温度冷却命中 PASSED
+=================================== ERRORS ====================================
+__________________ ERROR at setup of test_冷却后恢复 __________________
+
+    @pytest.fixture
+    def sampler():
+>       return FakeSampler(temp=)  # 参数漏填
+E       SyntaxError: invalid syntax
+
+tests/test_guard.py:41: SyntaxError
+=========================== short test summary info ===========================
+ERROR tests/test_guard.py::test_冷却后恢复
+1 error, 41 passed in 0.58s

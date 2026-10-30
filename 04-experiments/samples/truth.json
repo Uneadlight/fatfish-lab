@@ -1,0 +1,64 @@
+{
+  "pytest_fail_impl": {
+    "keyword": "range_delete(10, 20) == 6",
+    "type": "实现漏算右边界",
+    "lines": [
+      49
+    ],
+    "total_lines": 56
+  },
+  "pytest_fail_test": {
+    "keyword": "SyntaxError: invalid syntax",
+    "type": "测试文件自己写错",
+    "lines": [
+      48
+    ],
+    "total_lines": 53
+  },
+  "audit_report": {
+    "keyword": "代码 60000，文档写 30000",
+    "type": "文档参数与代码不一致",
+    "lines": [
+      14
+    ],
+    "total_lines": 21
+  },
+  "worker_log": {
+    "keyword": "write aborted, 3 pending changes dropped",
+    "type": "抢锁超时导致丢写",
+    "lines": [
+      64
+    ],
+    "total_lines": 86
+  },
+  "nvidia_smi": {
+    "keyword": "7912MiB /   8188MiB",
+    "type": "显存已到 96.6%，随时 OOM",
+    "lines": [
+      16
+    ],
+    "total_lines": 25
+  },
+  "all_green": {
+    "keyword": null,
+    "type": "无错误（测误报）",
+    "lines": [],
+    "total_lines": 31
+  },
+  "long_log": {
+    "keyword": "FATAL out of disk space",
+    "type": "磁盘写满",
+    "lines": [
+      138
+    ],
+    "total_lines": 200
+  },
+  "mixed_warn_error": {
+    "keyword": "PermissionError [WinError 5]",
+    "type": "权限被拒导致写失败",
+    "lines": [
+      5
+    ],
+    "total_lines": 7
+  }
+}

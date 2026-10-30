@@ -1,0 +1,41 @@
+{
+  "model": "qwen2.5:3b",
+  "steps": {
+    "baseline": {
+      "used_mib": 876,
+      "total_mib": 8188,
+      "util_pct": 28,
+      "temp_c": 44,
+      "limit_mib": 5732
+    },
+    "precheck": {
+      "qwen2.5:3b": true,
+      "qwen2.5:7b": false,
+      "qwen2.5vl:7b": false
+    },
+    "sampling": {
+      "util_min": 6,
+      "util_max": 28,
+      "temp_min": 44,
+      "temp_max": 46
+    },
+    "inference": {
+      "ok": true,
+      "eval_count": 91,
+      "prompt_eval_count": 52,
+      "tokens_per_sec": 92.42,
+      "wall_s": 3.0,
+      "peak_used_mib": 2982,
+      "peak_used_ratio": 0.3642,
+      "peak_util_pct": 96,
+      "peak_temp_c": 61,
+      "limit_mib": 5732,
+      "verdict": "PASS"
+    },
+    "after_unload": {
+      "used_mib": 879,
+      "util_pct": 5,
+      "temp_c": 47
+    }
+  }
+}

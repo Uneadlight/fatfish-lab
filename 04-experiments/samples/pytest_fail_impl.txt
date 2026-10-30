@@ -1,0 +1,56 @@
+tests/test_codec.py::test_roundtrip_1000 PASSED
+    [debug] fixture setup ok, tmp=9934
+    [debug] fixture setup ok, tmp=4600
+    [debug] fixture setup ok, tmp=6468
+tests/test_codec.py::test_边界_空串 PASSED
+    [debug] fixture setup ok, tmp=7747
+    [debug] fixture setup ok, tmp=1612
+    [debug] fixture setup ok, tmp=9469
+tests/test_framing.py::test_粘包_100帧 PASSED
+    [debug] fixture setup ok, tmp=5291
+    [debug] fixture setup ok, tmp=5424
+    [debug] fixture setup ok, tmp=3022
+tests/test_rpc.py::test_并发50连接 PASSED
+    [debug] fixture setup ok, tmp=6559
+    [debug] fixture setup ok, tmp=5735
+    [debug] fixture setup ok, tmp=7758
+tests/test_bplus.py::test_随机5000步对照dict PASSED
+    [debug] fixture setup ok, tmp=3323
+    [debug] fixture setup ok, tmp=3426
+    [debug] fixture setup ok, tmp=3627
+tests/test_paged.py::test_查找页读不超过树高 PASSED
+    [debug] fixture setup ok, tmp=2359
+    [debug] fixture setup ok, tmp=1410
+    [debug] fixture setup ok, tmp=5656
+tests/test_router.py::test_隐私标记禁止走云端 PASSED
+    [debug] fixture setup ok, tmp=3313
+    [debug] fixture setup ok, tmp=6740
+    [debug] fixture setup ok, tmp=8228
+tests/test_orchestrator.py::test_同秒同大小改写不会骗过判分 PASSED
+    [debug] fixture setup ok, tmp=9842
+    [debug] fixture setup ok, tmp=7822
+    [debug] fixture setup ok, tmp=6309
+tests/test_guard.py::test_暖机不重复计数 PASSED
+    [debug] fixture setup ok, tmp=2496
+    [debug] fixture setup ok, tmp=1900
+    [debug] fixture setup ok, tmp=8932
+tests/test_judge.py::test_无测试用例判红 PASSED
+    [debug] fixture setup ok, tmp=6526
+    [debug] fixture setup ok, tmp=7439
+    [debug] fixture setup ok, tmp=9104
+tests/test_bplus.py::test_删除后区间扫描 PASSED
+=================================== FAILURES ===================================
+__________________ test_范围删除返回个数 __________________
+
+    def test_范围删除返回个数():
+        tree = BPlusTree(order=8)
+        for k in range(0, 100, 2):
+            tree.insert(k, k)
+>       assert tree.range_delete(10, 20) == 6
+E       assert 5 == 6
+E        +  where 5 = range_delete(10, 20)
+
+tests/test_bplus.py:88: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_bplus.py::test_范围删除返回个数 - assert 5 == 6
+1 failed, 40 passed in 3.21s

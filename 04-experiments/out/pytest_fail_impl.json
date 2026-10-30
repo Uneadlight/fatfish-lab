@@ -1,0 +1,21 @@
+{
+  "reply": "KEY_LINES: 47, 48, 49\nREASON: 数值异常：行 47 和 48 中的循环插入操作可能导致树的结构不一致，进而影响行 49 的 range_delete 操作结果。",
+  "rows": {
+    "sample": "pytest_fail_impl",
+    "truth": [
+      49
+    ],
+    "pred": [
+      47,
+      48,
+      49
+    ],
+    "reason": "数值异常：行 47 和 48 中的循环插入操作可能导致树的结构不一致，进而影响行 49 的 range_delete 操作结果。",
+    "seconds": 1.15,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "reply": "KEY_LINES: 14,17\nREASON: 数值异常：死链数量为 2，而死代码候选数量为 13，明显不一致。",
+  "rows": {
+    "sample": "audit_report",
+    "truth": [
+      14
+    ],
+    "pred": [
+      14,
+      17
+    ],
+    "reason": "数值异常：死链数量为 2，而死代码候选数量为 13，明显不一致。",
+    "seconds": 0.47,
+    "hit": true,
+    "precision": 0.5,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

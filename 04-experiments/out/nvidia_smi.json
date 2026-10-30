@@ -1,0 +1,19 @@
+{
+  "reply": "KEY_LINES: 15\nREASON: GPU 内存使用率接近容量上限（8188MiB / 8112MiB），可能导致性能下降或限制。",
+  "rows": {
+    "sample": "nvidia_smi",
+    "truth": [
+      16
+    ],
+    "pred": [
+      15
+    ],
+    "reason": "GPU 内存使用率接近容量上限（8188MiB / 8112MiB），可能导致性能下降或限制。",
+    "seconds": 0.47,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}

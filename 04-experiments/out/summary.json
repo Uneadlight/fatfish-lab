@@ -1,0 +1,134 @@
+[
+  {
+    "sample": "pytest_fail_impl",
+    "truth": [
+      49
+    ],
+    "pred": [
+      47,
+      48,
+      49
+    ],
+    "reason": "数值异常：行 47 和 48 中的循环插入操作可能导致树的结构不一致，进而影响行 49 的 range_delete 操作结果。",
+    "seconds": 1.15,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "pytest_fail_test",
+    "truth": [
+      48
+    ],
+    "pred": [
+      46,
+      47
+    ],
+    "reason": "缺少参数导致的语法错误",
+    "seconds": 0.25,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "audit_report",
+    "truth": [
+      14
+    ],
+    "pred": [
+      14,
+      17
+    ],
+    "reason": "数值异常：死链数量为 2，而死代码候选数量为 13，明显不一致。",
+    "seconds": 0.47,
+    "hit": true,
+    "precision": 0.5,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "worker_log",
+    "truth": [
+      64
+    ],
+    "pred": [
+      63,
+      64
+    ],
+    "reason": "63 行的错误信息表明尝试获取存储锁失败，64 行的错误信息进一步说明由于锁超时导致写操作被中止。这两个错误直接导致了后续的错误。",
+    "seconds": 1.55,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "nvidia_smi",
+    "truth": [
+      16
+    ],
+    "pred": [
+      15
+    ],
+    "reason": "GPU 内存使用率接近容量上限（8188MiB / 8112MiB），可能导致性能下降或限制。",
+    "seconds": 0.47,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "all_green",
+    "truth": [],
+    "pred": [],
+    "reason": "指标超过阈值（同秒同大小改写不会骗过判分 超时）（规则丢弃无证据行 [28]） [保留 []]",
+    "seconds": 0.38,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "long_log",
+    "truth": [
+      138
+    ],
+    "pred": [
+      18,
+      35,
+      138,
+      174
+    ],
+    "reason": "警告块 34 和 35 的 retry 次数异常高 | 脏数据写入失败，提示空间不足 | out of disk space导致后续块无法写入（规则丢弃无证据行 [175]）",
+    "seconds": 1.11,
+    "hit": true,
+    "precision": 0.25,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  },
+  {
+    "sample": "mixed_warn_error",
+    "truth": [
+      5
+    ],
+    "pred": [
+      5
+    ],
+    "reason": "PermissionError 是一个明确的错误，表示写入操作被拒绝。",
+    "seconds": 0.36,
+    "hit": true,
+    "precision": 1.0,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+]

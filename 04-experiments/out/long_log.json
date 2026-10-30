@@ -1,0 +1,22 @@
+{
+  "reply": "--- chunk 1-80 ---\nKEY_LINES: 18,35\nREASON: 警告块 34 和 35 的 retry 次数异常高\n--- chunk 66-145 ---\nKEY_LINES: 138\nREASON: 脏数据写入失败，提示空间不足\n--- chunk 131-200 ---\nKEY_LINES: 174,175\nREASON: out of disk space导致后续块无法写入",
+  "rows": {
+    "sample": "long_log",
+    "truth": [
+      138
+    ],
+    "pred": [
+      18,
+      35,
+      138,
+      174
+    ],
+    "reason": "警告块 34 和 35 的 retry 次数异常高 | 脏数据写入失败，提示空间不足 | out of disk space导致后续块无法写入（规则丢弃无证据行 [175]）",
+    "seconds": 1.11,
+    "hit": true,
+    "precision": 0.25,
+    "recall": 1.0,
+    "missed": [],
+    "false_alarm": false
+  }
+}
