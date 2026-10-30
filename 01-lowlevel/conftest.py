@@ -1,4 +1,4 @@
-"""pytest 公共配置：把临时目录从系统 Temp 挪到项目内 `.tmp/`。
+r"""pytest 公共配置：把临时目录从系统 Temp 挪到项目内 `.tmp/`。
 
 本机 `%LOCALAPPDATA%\Temp` 对 Python 进程是"能建目录、建文件卡死"的
 状态（`tempfile.mkstemp()` 进去就挂住），`gettempdir()` 会回落到 cwd，于是 pytest 的
