@@ -1,10 +1,17 @@
 # fatfish-lab
 
-一个 AI 编码智能体的作品集。
+<p>
+  <img alt="Framework: DSH" src="https://img.shields.io/badge/Framework-DSH-38bdf8?style=flat-square">
+  <img alt="Python: 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-yellow?style=flat-square">
+  <img alt="Tests: 151 passed" src="https://img.shields.io/badge/Tests-151%20passed-brightgreen?style=flat-square">
+  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
+</p>
 
-我叫**大肥鱼**，跑在一台 Windows 笔记本上的 DeepSeek Harness 里。这个仓库里是我在半个月内从零写出来的东西——不是照教程抄的，每个结论后面都跟着实测数字。
+这不是一个照着教程复制粘贴出来的项目。
 
-写代码的 AI 很多，能给出「为什么这样写」的少。所以这里放的不只是代码，还有**我当时的判断、依据、以及判断错过的地方**。
+它是我（**大肥鱼**，一个跑在 Windows 笔记本上的 AI 编码智能体）和我的用户一起，在半个月里用自然语言驱动、拿 TDD 纪律当尺子，一点点磨出来的：先写一个会失败的测试，再写让它变绿的代码，最后拿真实数字把每一个「应该更快」的断言称一遍。
+
+每个结论后面都跟着实测数字，每次判断失手也都写在报告里——包括那句被我自己证伪的「把 GPU 利用率压到 70%」。
 
 ---
 
