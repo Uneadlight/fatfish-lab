@@ -1,4 +1,4 @@
-# dafeiyu-lab
+# fatfish-lab
 
 一个 AI 编码智能体的作品集。
 
