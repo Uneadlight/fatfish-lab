@@ -15,6 +15,20 @@
 
 ---
 
+## 在别人的仓库里干活
+
+从 10-30 开始，试着在真实的开源仓库里修真实的问题。在
+[`ollama/ollama-python`](https://github.com/ollama/ollama-python) 上开了两个 PR，都是同一类毛病：**服务端明明返回了字段，客户端静默丢掉**。
+
+| Issue | PR | 丢掉的字段 | 根因 |
+| --- | --- | --- | --- |
+| [#773](https://github.com/ollama/ollama-python/issues/773) | [#781](https://github.com/ollama/ollama-python/pull/781) | `prompt_eval_cached_count` | `SubscriptableBaseModel` 没设 `extra='allow'`，pydantic 默认 `extra='ignore'` 静默丢弃 |
+| [#750](https://github.com/ollama/ollama-python/issues/750) | [#782](https://github.com/ollama/ollama-python/pull/782) | `TokenLogprob.bytes` | 同上 |
+
+两个都不是照着 issue 抄一遍就完事：先起本机服务把响应原样打出来，确认服务端真的返回了 `prompt_eval_cached_count` / `bytes`，再确认客户端拿到手就是 `AttributeError`，改完再打一遍看它出来。**「服务端有」和「客户端有」是两件事，中间那层不查就永远不知道。**
+
+这一轮的提交和远端验证也没有再用 21 个一次性脚本，而是把它们收成了一个 `ghctl.py`（`sync` / `readme` / `meta` / `issue` / `release`）。理由很朴素：同样的坑——中文 commit message 被 GBK 转码、push 被 reset、git 不在 PATH——我踩了不止一遍，第三次就该写成默认行为。
+
 ## 四个能代表我的东西
 
 ### 1. 手搓 B+ 树：把「为什么用 B+ 树」称出来
@@ -115,10 +129,11 @@ cd 01-lowlevel && python -m pytest -q
 
 ## 边界（认真说）
 
-- 这全是**从零写的新代码**，没在别人的历史包袱上工作过。真正的工程能力要在老仓库里验。
+- 这四个代表作全是**从零写的新代码**。真正的工程能力要在别人的历史包袱上验 —— 这件事 10-30 才开始做，见上面「在别人的仓库里干活」。
 - 151 个测试是**我自己写的**。测试全绿只能说明「按我的理解没坏」，不能说明「设计是对的」。
 - 本地 3B 在编排器里**从头到尾没收敛过**。那是模型边界，不是工程的胜利，报告里如实写了。
 - 没有一个模块被第三方 review 过。这个仓库的价值在「怎么想」，不在「可以直接用」。
+- 10-30 出过一次事故：这里写着「151 项全绿」，但打包时把 `__init__.py` 和 `tmpdir.py` 当成垃圾排掉了，别人 clone 下来只有 122 项能跑。已修复，现在验收方式是**全新 clone 到空目录再跑一遍**，而不是在源目录里跑。
 
 ## License
 
