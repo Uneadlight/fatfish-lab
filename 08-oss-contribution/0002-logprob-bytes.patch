@@ -1,0 +1,133 @@
+From d2d55c7b39bc621c1895ecc1790e2532919bae37 Mon Sep 17 00:00:00 2001
+From: dafeiyu <dafeiyu@localhost>
+Date: Fri, 30 Oct 2026 18:28:31 +0800
+Subject: [PATCH] types: keep the server's `bytes` field on logprobs
+
+When logprobs=True the server returns `bytes` (the token's raw UTF-8
+bytes) on every entry of `logprobs` and `top_logprobs`. `TokenLogprob`
+only declared token/logprob, so pydantic's default `extra='ignore'`
+dropped the field without any error.
+
+Add `bytes: Optional[Sequence[int]] = None` to `TokenLogprob`, which
+`Logprob` inherits. It stays a list of ints (not `bytes`) so
+`model_dump()` remains JSON-serializable.
+
+Verified against a live server with qwen2.5:3b:
+
+  /api/generate (logprobs=True)
+    -> {token: Hello, logprob: -0.20, bytes: [72, 101, 108, 108, 111]}
+  client before this change
+    -> AttributeError: 'Logprob' object has no attribute 'bytes'
+  client after this change
+    -> [72, 101, 108, 108, 111]
+
+Older servers that omit the field still parse, with None by default and
+no key in `model_dump(exclude_none=True)`, matching the backward
+compatible behavior requested in #750.
+
+Tests: 4 added (generate, chat, optional field, top_logprobs).
+Fixes #750
+---
+ ollama/_types.py                 |  3 ++
+ tests/test_type_serialization.py | 67 +++++++++++++++++++++++++++++++-
+ 2 files changed, 69 insertions(+), 1 deletion(-)
+
+diff --git a/ollama/_types.py b/ollama/_types.py
+index ad04101..8e11871 100644
+--- a/ollama/_types.py
++++ b/ollama/_types.py
+@@ -266,6 +266,9 @@ class TokenLogprob(SubscriptableBaseModel):
+   logprob: float
+   'Log probability for the token.'
+ 
++  bytes: Optional[Sequence[int]] = None
++  'Raw UTF-8 bytes of the token. Useful when a token is not a standalone valid string.'
++
+ 
+ class Logprob(TokenLogprob):
+   top_logprobs: Optional[Sequence[TokenLogprob]] = None
+diff --git a/tests/test_type_serialization.py b/tests/test_type_serialization.py
+index e1af351..3c0f981 100644
+--- a/tests/test_type_serialization.py
++++ b/tests/test_type_serialization.py
+@@ -4,7 +4,16 @@ from pathlib import Path
+ 
+ import pytest
+ 
+-from ollama._types import ChatRequest, CreateRequest, GenerateRequest, Image
++from ollama._types import (
++  ChatRequest,
++  ChatResponse,
++  CreateRequest,
++  GenerateRequest,
++  GenerateResponse,
++  Image,
++  Logprob,
++  TokenLogprob,
++)
+ 
+ 
+ def test_image_serialization_bytes():
+@@ -122,3 +131,59 @@ def test_think_boolean_serialization():
+   assert ChatRequest(model='test-model', think=True).model_dump(exclude_none=True)['think'] is True
+   assert ChatRequest(model='test-model', think=False).model_dump(exclude_none=True)['think'] is False
+   assert 'think' not in ChatRequest(model='test-model', think=None).model_dump(exclude_none=True)
++
++
++def test_generate_response_keeps_logprob_bytes():
++  # Servers send raw token bytes next to token/logprob; they used to be dropped silently.
++  response = GenerateResponse.model_validate(
++    {
++      'model': 'test-model',
++      'response': 'Hello',
++      'done': True,
++      'logprobs': [{'token': 'Hello', 'logprob': -0.25, 'bytes': [72, 101, 108, 108, 111]}],
++    }
++  )
++
++  logprob = response.logprobs[0]
++  assert logprob.bytes == [72, 101, 108, 108, 111]
++  assert bytes(logprob.bytes).decode() == 'Hello'
++  # Kept as a list of ints so the model stays JSON-serializable.
++  assert response.model_dump(exclude_none=True)['logprobs'][0]['bytes'] == [72, 101, 108, 108, 111]
++
++
++def test_chat_response_keeps_logprob_bytes():
++  response = ChatResponse.model_validate(
++    {
++      'model': 'test-model',
++      'message': {'role': 'assistant', 'content': 'Hello'},
++      'done': True,
++      'logprobs': [{'token': 'Hello', 'logprob': -0.25, 'bytes': [72, 101, 108, 108, 111]}],
++    }
++  )
++
++  assert response.logprobs[0].bytes == [72, 101, 108, 108, 111]
++
++
++def test_logprob_bytes_is_optional():
++  # Servers predating the field must keep parsing, with the attribute present but unset.
++  for logprob in (
++    TokenLogprob.model_validate({'token': 'hi', 'logprob': -1.0}),
++    Logprob.model_validate({'token': 'hi', 'logprob': -1.0}),
++  ):
++    assert logprob.bytes is None
++    assert 'bytes' not in logprob.model_dump(exclude_none=True)
++
++
++def test_top_logprobs_keep_bytes():
++  # top_logprobs reuses TokenLogprob, so it has to carry bytes too.
++  logprob = Logprob.model_validate(
++    {
++      'token': ' there',
++      'logprob': -0.003,
++      'bytes': [32, 116, 104, 101, 114, 101],
++      'top_logprobs': [{'token': ' there', 'logprob': -0.003, 'bytes': [32, 116, 104, 101, 114, 101]}],
++    }
++  )
++
++  assert logprob.bytes == [32, 116, 104, 101, 114, 101]
++  assert logprob.top_logprobs[0].bytes == [32, 116, 104, 101, 114, 101]
+-- 
+2.56.0.windows.4
+

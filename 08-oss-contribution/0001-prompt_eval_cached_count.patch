@@ -1,0 +1,96 @@
+From cb085c1d8c0dfca818ed37311fab06e7fad95f52 Mon Sep 17 00:00:00 2001
+From: dafeiyu <dafeiyu@localhost>
+Date: Fri, 30 Oct 2026 13:12:01 +0800
+Subject: [PATCH] types: expose prompt_eval_cached_count on generate/chat
+ responses
+
+The server reports how many prompt tokens were served from the prompt
+cache, but BaseGenerateResponse had no field for it. Because
+SubscriptableBaseModel does not allow extra fields, pydantic silently
+dropped the value, so users could neither read it nor see it in
+model_dump().
+
+Verified locally against ollama 0.40.13: POST /api/generate returns
+"prompt_eval_cached_count": 0 right after prompt_eval_count.
+
+Closes #773
+---
+ ollama/_types.py                 |  3 +++
+ tests/test_type_serialization.py | 43 +++++++++++++++++++++++++++++++-
+ 2 files changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/ollama/_types.py b/ollama/_types.py
+index ad04101..b601448 100644
+--- a/ollama/_types.py
++++ b/ollama/_types.py
+@@ -249,6 +249,9 @@ class BaseGenerateResponse(SubscriptableBaseModel):
+   prompt_eval_count: Optional[int] = None
+   'Number of tokens evaluated in the prompt.'
+ 
++  prompt_eval_cached_count: Optional[int] = None
++  'Number of prompt tokens that were served from the prompt cache instead of being evaluated.'
++
+   prompt_eval_duration: Optional[int] = None
+   'Duration of evaluating the prompt in nanoseconds.'
+ 
+diff --git a/tests/test_type_serialization.py b/tests/test_type_serialization.py
+index e1af351..5043f5d 100644
+--- a/tests/test_type_serialization.py
++++ b/tests/test_type_serialization.py
+@@ -4,7 +4,7 @@ from pathlib import Path
+ 
+ import pytest
+ 
+-from ollama._types import ChatRequest, CreateRequest, GenerateRequest, Image
++from ollama._types import ChatRequest, ChatResponse, CreateRequest, GenerateRequest, GenerateResponse, Image
+ 
+ 
+ def test_image_serialization_bytes():
+@@ -122,3 +122,44 @@ def test_think_boolean_serialization():
+   assert ChatRequest(model='test-model', think=True).model_dump(exclude_none=True)['think'] is True
+   assert ChatRequest(model='test-model', think=False).model_dump(exclude_none=True)['think'] is False
+   assert 'think' not in ChatRequest(model='test-model', think=None).model_dump(exclude_none=True)
++
++
++def test_generate_response_keeps_prompt_eval_cached_count():
++  response = GenerateResponse.model_validate(
++    {
++      'model': 'test-model',
++      'response': 'hi',
++      'done': True,
++      'prompt_eval_count': 30,
++      'prompt_eval_cached_count': 16,
++    }
++  )
++
++  assert response.prompt_eval_cached_count == 16
++  assert response['prompt_eval_cached_count'] == 16
++  assert 'prompt_eval_cached_count' in response
++  assert response.model_dump(exclude_none=True)['prompt_eval_cached_count'] == 16
++
++
++def test_chat_response_keeps_prompt_eval_cached_count():
++  response = ChatResponse.model_validate(
++    {
++      'model': 'test-model',
++      'message': {'role': 'assistant', 'content': 'hi'},
++      'done': True,
++      'prompt_eval_count': 30,
++      'prompt_eval_cached_count': 16,
++    }
++  )
++
++  assert response.prompt_eval_cached_count == 16
++
++
++def test_prompt_eval_cached_count_is_optional():
++  # Servers predating the field must keep parsing, with the attribute present but unset.
++  for response in (
++    GenerateResponse.model_validate({'model': 'test-model'}),
++    ChatResponse.model_validate({'model': 'test-model', 'message': {'role': 'assistant', 'content': 'hi'}}),
++  ):
++    assert response.prompt_eval_cached_count is None
++    assert 'prompt_eval_cached_count' not in response.model_dump(exclude_none=True)
+-- 
+2.56.0.windows.4
+

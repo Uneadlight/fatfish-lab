@@ -1,0 +1,23 @@
+{
+  "name": "@local/dsh-env-doctor",
+  "version": "0.6.12",
+  "private": true,
+  "type": "module",
+  "description": "大内总管（Env Doctor）：DSH 的插件与环境大管家——一条命令查清全部运行状态、逐插件验证加载、自动化覆盖、工具链与模型版本，并带后台巡检守护。",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
