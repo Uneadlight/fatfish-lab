@@ -13,6 +13,7 @@ jobs:
   pytest:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -33,11 +34,13 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          python -m pip install pytest pytest-timeout
 
+      # -v -s 让每个用例名都进日志；--timeout 把"卡住"变成"指出卡住的那个用例"，
+      # 而不是让整个 job 挂到超时。
       - name: Run ${{ matrix.suite }}
         working-directory: ${{ matrix.suite }}
-        run: python -m pytest -q
+        run: python -u -m pytest -v -s --timeout=60 --timeout-method=thread
 
   # 汇总成一个稳定名字，方便以后设成 required status check
   all-green:
