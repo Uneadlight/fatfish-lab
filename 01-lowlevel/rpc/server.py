@@ -188,7 +188,10 @@ class RPCServer:
                     break
         finally:
             with self._conns_lock:
-                self._conns.discard(conn)
+                # 只摘除服务端主动停止时的那批连接；对端正常断开的交给 shutdown()
+                # 统一清理，避免这里和 shutdown() 抢同一把锁、拖慢高频短连接场景。
+                if self._stop.is_set():
+                    self._conns.discard(conn)
             self._bump("active", -1)
             with contextlib.suppress(OSError):
                 conn.close()
