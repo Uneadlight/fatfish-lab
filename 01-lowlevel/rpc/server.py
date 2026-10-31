@@ -104,6 +104,12 @@ class RPCServer:
         self._stop.set()
         sock, self._sock = self._sock, None
         if sock is not None:
+            # 先 shutdown 再 close：只 close 时阻塞在 accept() 里的线程不会被唤醒，
+            # 监听 socket 的端口释放时机就变得不可预期（Linux CI 上实测：shutdown()
+            # 之后紧接着 bind 同一端口会拿到 EADDRINUSE；Windows 的 SO_REUSEADDR
+            # 语义宽松，所以本地测不出来）。
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
             with contextlib.suppress(OSError):
                 sock.close()
         with self._conns_lock:
