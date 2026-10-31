@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -98,12 +99,16 @@ def test_budget_negative_tokens_ignored():
 # 工作区
 # --------------------------------------------------------------------------- #
 def test_workspace_rejects_escape(tmp_path):
+    # 绝对路径的写法是平台相关的：Windows 上 `C:/...` 带 drive，
+    # POSIX 上它只是个普通相对路径（会落在工作区里，逃不出去，所以不该被拒）。
+    # 这里按平台取一个真正的"工作区之外"的绝对路径。
+    abs_outside = "C:/Windows/x.txt" if os.name == "nt" else "/etc/passwd"
     ws = RunWorkspace.create()
     try:
         with pytest.raises(WorkspaceError):
             ws.write("../逃出去.txt", "x")
         with pytest.raises(WorkspaceError):
-            ws.write("C:/Windows/x.txt", "x")
+            ws.write(abs_outside, "x")
         ws.seed({"pkg/a.py": "x = 1\n"})
         assert ws.read("pkg/a.py") == "x = 1\n"
         snap = ws.snapshot()
