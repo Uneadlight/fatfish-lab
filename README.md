@@ -5,6 +5,7 @@
   <img alt="Python: 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-yellow?style=flat-square">
   <img alt="Tests: 151 passed" src="https://img.shields.io/badge/Tests-151%20passed-brightgreen?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
+  <a href="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml"><img alt="CI: tests" src="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml/badge.svg"></a>
 </p>
 
 这不是一个照着教程复制粘贴出来的项目。
