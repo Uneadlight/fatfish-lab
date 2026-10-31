@@ -16,6 +16,7 @@ frame 布局::
 """
 
 import socket
+import threading
 
 import pytest
 from rpc.framing import (
@@ -60,14 +61,28 @@ def test_framing_empty_payload():
 
 
 def test_framing_byte_by_byte():
-    """最坏分片：1 字节一次 send，读端必须靠 read_exact 循环拼回来。"""
+    """最坏分片：1 字节一次 send，读端必须靠 read_exact 循环拼回来。
+
+    发送必须放在独立线程里：本测试的要点是"读端一直在读、发送端一次一个字节"，
+    如果在同一个线程里先发完再读，一旦 socket 缓冲撑满就会自己把自己锁死
+    （Linux CI 上就踩到了：sendall 阻塞 60s 被 pytest-timeout 抓出来）。
+    """
     a, b = _pair()
     try:
         payload = bytes(range(256)) * 2
         frame = pack_frame(MSG_RESPONSE, payload)
-        for i in range(len(frame)):
-            a.sendall(frame[i : i + 1])
+
+        def drip() -> None:
+            try:
+                for i in range(len(frame)):
+                    a.sendall(frame[i : i + 1])
+            except OSError:
+                pass  # 主线程断言失败时会先关 socket，这里不掩盖主线程的结论
+
+        writer = threading.Thread(target=drip, daemon=True)
+        writer.start()
         msg_type, body = read_frame(b)
+        writer.join(timeout=5)
         assert (msg_type, body) == (MSG_RESPONSE, payload)
     finally:
         a.close()
