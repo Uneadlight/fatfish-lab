@@ -212,6 +212,50 @@ def cmd_whoami(_a) -> int:
   return 0
 
 
+def unpushed_count(git: str, cwd: Path) -> int:
+  """本地领先远端多少个提交；判断不了返回 -1。
+
+  有上游分支就和上游比，没有就和 origin/main 比——`ghctl` 从来只往 origin main 推，
+  所以即使当前分支没设 upstream，这个比较也是有意义的。
+  """
+  for ref in ('@{u}', 'origin/main', 'origin/HEAD'):
+    rc, out = run_git(git, ['rev-list', '--count', f'{ref}..HEAD'], cwd, check=False)
+    if rc == 0 and out.strip().isdigit():
+      return int(out.strip())
+  return -1
+
+
+def push_branch(git: str, cwd: Path, slug: str, tries: int) -> int:
+  """带认证头 + HTTP/1.1 + 退避重试，把 HEAD 推到 origin main。"""
+  b64 = base64.b64encode(f'x-access-token:{token()}'.encode()).decode()
+  last = ''
+  for i in range(1, tries + 1):
+    rc, out = run_git(
+      git,
+      [
+        '-c', f'http.extraheader=AUTHORIZATION: basic {b64}',
+        '-c', 'http.version=HTTP/1.1',
+        'push', 'origin', 'HEAD:main',
+      ],
+      cwd,
+      check=False,
+    )
+    if rc == 0:
+      tail = [ln for ln in out.splitlines() if '->' in ln]
+      print(f'[OK] push 成功（第 {i} 次尝试）{slug} | ' + (tail[-1].strip() if tail else ''))
+      return 0
+    last = out.strip()[:300]
+    if i < tries:
+      tail_line = last.splitlines()[-1] if last else ''
+      print(f'     push 第 {i} 次失败，5 秒后重试：{tail_line}')
+      time.sleep(5)
+  raise Fail(
+    '执行失败',
+    f'push 重试 {tries} 次仍失败：{last}',
+    '线路问题：提交已在本地，稍后重跑 `ghctl sync` 会只推送、不重复提交',
+  )
+
+
 def cmd_sync(a) -> int:
   git = find_git()
   cwd = Path(a.repo).resolve() if a.repo else find_repo_root(Path.cwd())
@@ -227,8 +271,19 @@ def cmd_sync(a) -> int:
   _, staged = run_git(git, ['diff', '--cached', '--name-only'], cwd)
   staged_files = [x for x in staged.splitlines() if x.strip()]
   if not staged_files:
-    print('[OK] 没有待提交的改动（工作区干净），跳过提交')
-    return 0
+    ahead = unpushed_count(git, cwd)
+    if ahead == 0:
+      print('[OK] 工作区干净、也没有未推送的提交，无事可做')
+      return 0
+    if ahead == -1:
+      print('[WARN] 工作区干净，但判断不了领先远端多少（没有上游分支？）')
+      print('       若上次是「提交成功、推送失败」，手动跑：git push origin HEAD:main')
+      return 0
+    print(f'     工作区干净，但有 {ahead} 个提交还没推上去 → 跳过提交，只推送')
+    if a.no_push:
+      print('     已按 --no-push 停在本地')
+      return 0
+    return push_branch(git, cwd, slug, a.tries)
   print(f'     暂存 {len(staged_files)} 个文件：')
   for f in staged_files[:12]:
     print(f'       - {f}')
@@ -257,25 +312,7 @@ def cmd_sync(a) -> int:
     return 0
 
   # 4) 推送（认证头 + HTTP/1.1 + 退避重试）
-  b64 = base64.b64encode(f'x-access-token:{token()}'.encode()).decode()
-  last = ''
-  for i in range(1, a.tries + 1):
-    rc, out = run_git(
-      git,
-      ['-c', f'http.extraheader=AUTHORIZATION: basic {b64}',
-       '-c', 'http.version=HTTP/1.1', 'push', 'origin', 'HEAD:main'],
-      cwd,
-      check=False,
-    )
-    if rc == 0:
-      tail = [ln for ln in out.splitlines() if '->' in ln]
-      print(f'[OK] push 成功（第 {i} 次尝试）{slug} | ' + (tail[-1].strip() if tail else ''))
-      return 0
-    last = out.strip()[:300]
-    if i < a.tries:
-      print(f'     push 第 {i} 次失败，5 秒后重试：{last.splitlines()[-1] if last else ""}')
-      time.sleep(5)
-  raise Fail('执行失败', f'push 重试 {a.tries} 次仍失败：{last}', '线路问题，稍后手动重跑 `ghctl sync` 不可行（已提交），改用 push 单独重试')
+  return push_branch(git, cwd, slug, a.tries)
 
 
 def cmd_use(a) -> int:

@@ -23,6 +23,11 @@ SAMPLES = ROOT / "samples"
 OUT = ROOT / "out"
 TOLERANCE = 2  # 真因前后 2 行内算命中（错误行常和细节行分开）
 
+# 按行数自动选模型（实测依据见 cmp-models.json 与 README「两个 3b 的分工」）
+MODEL_SHORT = "qwen2.5:3b"        # 通用版：短文本的判官，8/8 全过
+MODEL_LONG = "qwen2.5-coder:3b"   # 代码版：长日志的过滤器，精确率 1.00 不撒网
+LONG_THRESHOLD = 150              # 超过这么多行就换 coder
+
 PROMPT = """下面是一段程序输出。请找出**最可能导致失败的那 1-3 行**（不要找正常的行）。
 
 规则：
@@ -46,7 +51,17 @@ REASON: <一句话中文说明，不超过 30 字>
 """
 
 
-def call_ollama(prompt: str, model: str = "qwen2.5:3b", timeout: int = 180) -> str:
+def pick_model(nlines: int) -> str:
+    """按行数选模型。
+
+    长日志（>150 行）用 coder：它在 long_log 样本上精确率 1.00（通用版只 0.20，会撒网）。
+    短文本用通用版：它是更好的判官，8 个样本全过；coder 在 pytest 样本上反而全崩
+    （把 `assert 5 == 6` 理解成"测试写错了"而不是"实现算错了"）。
+    """
+    return MODEL_LONG if nlines > LONG_THRESHOLD else MODEL_SHORT
+
+
+def call_ollama(prompt: str, model: str = MODEL_SHORT, timeout: int = 180) -> str:
     body = json.dumps({
         "model": model,
         "prompt": prompt,
@@ -146,10 +161,11 @@ def filter_evidence(pred: list[int], lines: list[str], tol: int = 3) -> tuple[li
     return kept, dropped
 
 
-def triage_chunked(text: str) -> tuple[list[int], str, str]:
+def triage_chunked(text: str, model: str | None = None) -> tuple[list[int], str, str]:
     """把长文本切块分别问，合并全局行号。返回 (行号, 理由, 原始回复拼接)。"""
     lines = text.splitlines()
     total = len(lines)
+    model = model or pick_model(total)
     picked: set[int] = set()
     reasons: list[str] = []
     raw: list[str] = []
@@ -158,7 +174,7 @@ def triage_chunked(text: str) -> tuple[list[int], str, str]:
     while start < total:
         end = min(start + CHUNK_LINES, total)
         chunk = "\n".join(f"{i + 1:4d}| {lines[i]}" for i in range(start, end))
-        reply = call_ollama(PROMPT.format(numbered=chunk))
+        reply = call_ollama(PROMPT.format(numbered=chunk), model=model)
         raw.append(f"--- chunk {start + 1}-{end} ---\n{reply}")
         nums, reason = parse(reply)
         globals_ = [n for n in nums if 1 <= n <= total]
@@ -177,22 +193,23 @@ def triage_chunked(text: str) -> tuple[list[int], str, str]:
     return sorted(picked), " | ".join(reasons) + note, "\n".join(raw)
 
 
-def run_file(path: str, context_lines: int = 1) -> int:
+def run_file(path: str, context_lines: int = 1, model: str | None = None) -> int:
     """真实用法：把一份输出文件丢进来，打印它挑出的行 + 上下文。"""
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+    model = model or pick_model(len(lines))
     t0 = time.perf_counter()
     if len(lines) > CHUNK_LINES:
-        pred, reason, _raw = triage_chunked(text)
+        pred, reason, _raw = triage_chunked(text, model)
     else:
-        reply = call_ollama(PROMPT.format(numbered=number_lines(text)))
+        reply = call_ollama(PROMPT.format(numbered=number_lines(text)), model=model)
         pred, reason = parse(reply)
         kept, dropped = filter_evidence(pred, lines)
         pred = sorted(set(kept))
         if dropped:
             reason += f"（丢弃无证据行 {sorted(dropped)}）"
     dt = time.perf_counter() - t0
-    print(f"文件 {path} 共 {len(lines)} 行，耗时 {dt:.1f}s")
+    print(f"文件 {path} 共 {len(lines)} 行 → 用 {model}，耗时 {dt:.1f}s")
     print(f"模型理由：{reason}")
     if not pred:
         print("→ 没发现错误行（KEY_LINES: NONE）")
@@ -216,10 +233,11 @@ def main() -> None:
         text = (SAMPLES / f"{name}.txt").read_text(encoding="utf-8")
         lines = text.splitlines()
         t0 = time.perf_counter()
+        model = pick_model(len(lines))
         if len(lines) > CHUNK_LINES:
-            pred, reason, reply = triage_chunked(text)
+            pred, reason, reply = triage_chunked(text, model)
         else:
-            reply = call_ollama(PROMPT.format(numbered=number_lines(text)))
+            reply = call_ollama(PROMPT.format(numbered=number_lines(text)), model=model)
             pred, reason = parse(reply)
             kept, dropped_one = filter_evidence(pred, lines)
             if dropped_one:
@@ -237,7 +255,7 @@ def main() -> None:
             encoding="utf-8")
         flag = "HIT " if s["hit"] else "MISS"
         print(f"[{flag}] {name:20s} 真因{t['lines']} 它报{pred} "
-              f"P={s['precision']:.2f} R={s['recall']:.2f} {cost_s:.1f}s  {reason[:50]}")
+              f"P={s['precision']:.2f} R={s['recall']:.2f} {cost_s:.1f}s {model:16s} {reason[:40]}")
 
     n = len(rows)
     hits = sum(1 for r in rows if r["hit"])
