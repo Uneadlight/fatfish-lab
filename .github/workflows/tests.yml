@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - 01-lowlevel
+          - 02-edge-node
+          - 03-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show interpreter
+        run: python -V
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Run ${{ matrix.suite }}
+        working-directory: ${{ matrix.suite }}
+        run: python -m pytest -q
+
+  # 汇总成一个稳定名字，方便以后设成 required status check
+  all-green:
+    name: all-green
+    needs: pytest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          if [ "${{ needs.pytest.result }}" != "success" ]; then
+            echo "有一个或多个套件失败：${{ needs.pytest.result }}"
+            exit 1
+          fi
+          echo "三个套件全部通过"
