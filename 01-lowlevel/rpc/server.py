@@ -187,11 +187,13 @@ class RPCServer:
                 except (OSError, CodecError):
                     break
         finally:
+            # 无条件摘除：这条连接已经结束，不管是对端断开、帧坏了还是服务端在停。
+            # 早先这里加了 ``if self._stop.is_set()`` 的条件，本意是"停止时统一清理、
+            # 少抢一次锁"，结果是正常短连接永远不会被摘掉——集合里堆着几千个已关闭的
+            # socket 对象（issue #2：跑几千轮后 RSS 从 40 MB 涨到 300 MB+），
+            # 而 ``active`` 计数照常递减到 0，所以统计上"看起来一切正常"。
             with self._conns_lock:
-                # 只摘除服务端主动停止时的那批连接；对端正常断开的交给 shutdown()
-                # 统一清理，避免这里和 shutdown() 抢同一把锁、拖慢高频短连接场景。
-                if self._stop.is_set():
-                    self._conns.discard(conn)
+                self._conns.discard(conn)
             self._bump("active", -1)
             with contextlib.suppress(OSError):
                 conn.close()

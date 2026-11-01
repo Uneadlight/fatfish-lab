@@ -182,3 +182,29 @@ def test_rpc_shutdown_releases_port(server):
     s.close()
     # 重新 start 以便 fixture 的 shutdown 不报错
     server.start()
+
+
+def test_closed_short_connections_are_released(server):
+    """issue #2 回归：短连接反复连断后，服务端不该继续持有已关闭的 socket。
+
+    曾经的写法是 ``_serve_conn`` 的 finally 里只在 ``self._stop.is_set()`` 时才
+    从 ``_conns`` 摘除——对端正常断开的连接永远不摘。跑几千轮后集合里堆着上千个
+    已关闭的 socket 对象，RSS 从 40 MB 涨到 300 MB+，而 ``stats()["active"]``
+    照常递减到 0，所以从统计上看"一切正常"。
+    """
+    for i in range(300):
+        c = RPCClient("127.0.0.1", server.port)
+        try:
+            assert c.call("add", {"a": i, "b": 1}) == i + 1
+        finally:
+            c.close()
+
+    # 每条连接的收尾在一个独立线程里，等它们把 finally 走完
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if server.stats["active"] == 0 and not server._conns:
+            break
+        time.sleep(0.01)
+
+    assert server.stats["active"] == 0
+    assert not server._conns, f"仍有 {len(server._conns)} 个已关闭连接被持有（内存泄漏）"
