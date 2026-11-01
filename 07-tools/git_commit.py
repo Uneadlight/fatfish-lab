@@ -67,6 +67,35 @@ def auth_args() -> list[str]:
     ]
 
 
+# 只有"这一会儿网不好"才值得重试。认证失败、非快进、分支不存在重试三次也还是那样，
+# 白等 45 秒还掩盖真错误。——清单参照 dsh-superagent-prototype 对 passing failure 的定义：
+# HTTP 408/429/5xx、连接被拒/重置/超时。清单外一律不自动重试。
+TRANSIENT_PATTERNS = (
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "recv failure",
+    "failed to connect",
+    "could not connect",
+    "operation timed out",
+    "network is unreachable",
+    "remote end hung up",
+    "early eof",
+    "http 408",
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "temporary failure",
+)
+
+
+def is_transient(stderr: str) -> bool:
+    low = stderr.lower()
+    return any(p in low for p in TRANSIENT_PATTERNS)
+
+
 def push_branch(repo: Path, branch: str, tries: int = PUSH_TRIES) -> bool:
     extra = auth_args()
     for attempt in range(1, tries + 1):
@@ -75,10 +104,15 @@ def push_branch(repo: Path, branch: str, tries: int = PUSH_TRIES) -> bool:
             print(f"[push] OK（第 {attempt} 次）")
             return True
         last = (p.stderr.strip().splitlines() or ["?"])[-1]
-        print(f"[push] 第 {attempt}/{tries} 次失败: {last}")
+        if not is_transient(p.stderr):
+            print(f"[push] 失败（非临时性，不重试）: {last}")
+            print("  手动重试：")
+            print(f"  git -C {repo} " + " ".join(extra) + f" push origin {branch}")
+            return False
+        print(f"[push] 第 {attempt}/{tries} 次失败（临时性）: {last}")
         if attempt < tries:
             time.sleep(PUSH_BACKOFF_SECONDS * attempt)
-    print("[push] 全部失败。手动重试：")
+    print("[push] 重试用尽。手动重试：")
     print(f"  git -C {repo} " + " ".join(extra) + f" push origin {branch}")
     return False
 

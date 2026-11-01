@@ -36,6 +36,24 @@ DEFAULT_PLAN = ROOT / 'tools' / 'lab' / 'release-plan.txt'
 
 REQUIRED_SECTIONS = ('**做了什么**', '**为什么**', '**取舍**', '**教训**')
 
+JOURNAL = ROOT / 'tools' / 'lab' / 'journal.jsonl'
+
+
+def journal(action: str, **fields) -> None:
+  """先落盘，再执行 —— 参照 dsh-superagent 的 stored work。
+
+  一个动作「做了什么决定」先记下来，再去做。中途崩了，日志里会有 start 但没有
+  done，下次一眼看得出上次没走完，而不是靠回忆「我上次好像拷过」。写不了日志
+  不该阻断主流程（否则因为日志挂了就干不了活），但要说出来。
+  """
+  row = {'at': time.strftime('%Y-%m-%d %H:%M:%S'), 'action': action, **fields}
+  try:
+    JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    with JOURNAL.open('a', encoding='utf-8', newline='\n') as handle:
+      handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+  except OSError as exc:
+    print(f'[WARN] journal 写入失败（不影响本次执行）: {exc}')
+
 
 def _fail(code: int, msg: str) -> int:
   tag = '能力缺失' if code == 2 else '用途错误'
@@ -181,6 +199,15 @@ def cmd_stage(a: argparse.Namespace) -> int:
 
   copied: list[tuple[str, int]] = []
   scrubbed: list[str] = []
+  if not a.dry:
+    # 先落盘：这条记下去之后才开始动发布仓库。中途崩了，日志里会留下一个没有
+    # 对应 done 的 start —— 下次知道上次停在哪儿，不用靠回忆。
+    journal(
+      'stage.start',
+      repo=str(repo),
+      files=[rel for _, _, rel in targets],
+      missed=[rel for _, rel in missed],
+    )
   for src, dst, rel in targets:
     if a.dry:
       copied.append((rel, src.stat().st_size))
@@ -254,8 +281,12 @@ def cmd_stage(a: argparse.Namespace) -> int:
 
   if path_hits or secret_hits:
     print('  [STOP] 不为 0，不许发布')
+    if not a.dry:
+      journal('stage.aborted', reason='scan', path_hits=path_hits, secret_hits=secret_hits)
     return 1
   print('  [OK] 可以发布')
+  if not a.dry:
+    journal('stage.done', files=len(copied), scrubbed=len(scrubbed), missed=len(missed))
   return 1 if missed else 0
 
 
@@ -491,6 +522,53 @@ def cmd_issue(a: argparse.Namespace) -> int:
   return 0
 
 
+# ------------------------------------------------------------ journal
+
+
+def cmd_journal(a: argparse.Namespace) -> int:
+  """看最近的动作记录，并标出「有 start 没 done」的未完成项。"""
+  if not JOURNAL.exists():
+    print('还没有 journal（等你第一次跑 lab stage 就会生成）')
+    return 0
+  rows = []
+  for line in JOURNAL.read_text(encoding='utf-8').splitlines():
+    line = line.strip()
+    if not line:
+      continue
+    try:
+      rows.append(json.loads(line))
+    except json.JSONDecodeError:
+      continue
+
+  # 判断未完成：一个 start 之后没有同类的 done 或 aborted
+  open_actions: dict[str, dict] = {}
+  for row in rows:
+    action = str(row.get('action', ''))
+    if action.endswith('.start'):
+      open_actions[action[: -len('.start')]] = row
+    elif action.endswith(('.done', '.aborted')):
+      open_actions.pop(action[: action.rfind('.')], None)
+
+  show = rows[-a.limit :] if a.limit > 0 else rows
+  print(f'journal: {JOURNAL}  共 {len(rows)} 条，显示最近 {len(show)} 条')
+  for row in show:
+    detail = ''
+    for key in ('files', 'reason', 'path_hits', 'scrubbed'):
+      if key in row:
+        value = row[key]
+        detail = f'  {key}={len(value) if isinstance(value, list) else value}'
+        break
+    print(f'  {row.get("at", "?")}  {row.get("action", "?"):16}{detail}')
+
+  if open_actions:
+    print('\n[未完成] 这些动作留下了 start 却没有 done：')
+    for name, row in open_actions.items():
+      print(f'  {row.get("at", "?")}  {name}  （上次可能中途崩了，核对现场再重跑）')
+    return 1
+  print('\n[AUDIT] 没有未完成的动作')
+  return 0
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -513,6 +591,10 @@ def build_parser() -> argparse.ArgumentParser:
   st.add_argument('--dry', action='store_true', help='只打印不拷贝')
   st.add_argument('--skip-scan', dest='skip_scan', action='store_true', help='跳过安全扫描')
   st.set_defaults(func=cmd_stage)
+
+  jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
+  jr.add_argument('--limit', type=int, default=20, help='显示最近 N 条，默认 20；0 = 全部')
+  jr.set_defaults(func=cmd_journal)
 
   ar = sub.add_parser('asar', help='读 app.asar（不解包）')
   ar.add_argument('action', choices=['list', 'desc', 'read'])
