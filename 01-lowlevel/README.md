@@ -70,3 +70,16 @@ python bench/stress_concurrent.py --workers 8 --per 1000
 - **不做 checkpoint**：恢复后 WAL 整体 truncate；但如果长时间不重启，WAL 会持续增长。
 - **没有删除**：`delete()` 故意抛 `NotImplementedError`，留给下一阶段（墓碑 + 合并）。
 - **压测数据在 `bench/.stress/`**，已 gitignore，每次重跑都会重建。
+
+## 下一步（规划，未实现）
+
+| 项 | 为什么值得做 | 卡在哪 |
+|---|---|---|
+| `delete()`：墓碑 + 页合并 | 现在故意抛 `NotImplementedError`，一个只能长不能删的树不算存储引擎 | 要先把 `PageFile` 的空闲页管理补上，否则删完文件不缩 |
+| WAL checkpoint | 恢复后 WAL 会 truncate，但**一直不重启就一直涨** | 要在"重放一部分 + 保留尾部"之间划界，判断哪条 txn 能被安全丢弃 |
+| 真·多写者 | 现在多进程是排队不是并行 | 要先定冲突策略：崩溃恢复和并发写会抢同一个 WAL，得先讨论段锁 |
+| **拿它做一件真东西** | 只有被真用过，才知道边界在哪 | 进行中：本地账本 CLI（存储层换成 `DurableTree`） |
+
+原则：**先让它在真场景里被用一次，再回来补这三项**——按需做出来的 `checkpoint` 比
+凭空设计的更可能对。否则就是在给自己造一个没人用的数据库。
+
