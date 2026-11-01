@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """全局自检（Global Health Check）—— 四维度体检，只读，不删任何东西。
 
-用法：python D:\work\\自进化\\global-healthcheck.py
+用法：python E:\\DS公作区\\自进化\\global-healthcheck.py
 输出：[OK] / [WARN] / [FAIL] 标记；非 OK 项附建议。
 清理动作单独列「待确认清单」，等用户确认后走 safe_mutate。
 """
@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -75,7 +76,15 @@ try:
     imp5 = [m for m in mems if m.get("importance") == 5 and not m.get("deprecated")]
     chars5 = sum(len(m.get("content", "")) for m in imp5)
     mark("OK", "memories.json", f"valid=True count={len(mems)} dup_ids={len(ids) - len(set(ids))} imp5={len(imp5)} chars5={chars5}")
-    mark("WARN" if chars5 > 14000 else "OK", "memories 5/5 字符", f"{chars5} 字符（触发线 14,000）")
+    # 2026-11-01 修判据：5/5 单独没有"触发线"——真正的约束是 5/5+4/5 的总注入量（4/5 也是全注入的），
+    # 拿 5/5 一个分项跟 14,000 比，等于用尺子量错的那一段。预算见 dsh-memory 的 CHAR_BUDGET。
+    imp4 = [m for m in mems if m.get("importance") == 4 and not m.get("deprecated")]
+    chars4 = sum(len(m.get("content", "")) for m in imp4)
+    total_inject = chars5 + chars4
+    budget = 60000
+    mark("WARN" if total_inject > budget * 0.8 else "OK", "记忆注入量",
+         f"{total_inject:,} / {budget:,} 字符（{total_inject / budget * 100:.0f}%，报警线 80%）；"
+         f"其中 5/5 {len(imp5)} 条 {chars5:,}、4/5 {len(imp4)} 条 {chars4:,}")
 except Exception as e:  # noqa: BLE001
     mark("FAIL", "memories.json", f"读取/解析失败: {e}")
 
@@ -132,17 +141,32 @@ state = "DISABLED" if re.search(r"已禁用|Disabled", out, re.IGNORECASE) else 
 mark("OK", "DSH-Auto-Learn", state)
 
 # ---------- 维度 4：环境探针 ----------
-for mod in ("PIL", "yaml", "requests", "mypy", "pytest", "ruff"):
-    try:
-        __import__(mod)
-        mark("OK", f"py:{mod}", "import ok")
-    except Exception as e:  # noqa: BLE001
-        mark("WARN", f"py:{mod}", f"{type(e).__name__}: {e}")
+# 判据（2026-11-01 修）：以前拿当前解释器 import 判断"工具有没有装"，
+# 但当前解释器是 DSH 自带的 runtime python，它本来就不该装 yaml/requests/mypy/pytest/ruff。
+# 用错解释器去检查工具，结果就是永远 WARN。判据要落在"我调不调得到它"，不是"这个进程 import 得到它"。
+try:
+    __import__("PIL")
+    mark("OK", "py:PIL", "import ok（runtime python 自带）")
+except Exception as e:  # noqa: BLE001
+    mark("INFO", "py:PIL", f"{type(e).__name__}: {e}")
 
-rc, out = run([PY, "-m", "mypy", "--version"], timeout=20)
-mark("OK" if rc == 0 else "WARN", "mypy", out[:80])
-rc, out = run([PY, "-m", "pytest", "--version"], timeout=20)
-mark("OK" if rc == 0 else "WARN", "pytest", out[:80])
+TOOL_DIRS = [
+    os.path.join(HOME, ".local", "bin"),
+    r".\.venv\Scripts",
+]
+for tool in ("ruff", "pytest", "mypy"):
+    found = shutil.which(tool)
+    if not found:
+        for d in TOOL_DIRS:
+            for suffix in (".exe", ".cmd", ""):
+                cand = os.path.join(d, tool + suffix)
+                if os.path.isfile(cand):
+                    found = cand
+                    break
+            if found:
+                break
+    mark("OK" if found else "INFO", f"cmd:{tool}", found or "PATH / uv tool / 项目 venv 三处都没有")
+
 
 try:
     import urllib.request
@@ -154,14 +178,16 @@ except Exception as e:  # noqa: BLE001
 
 # ---------- 汇总 ----------
 print()
-ok = warn = fail = 0
+ok = warn = info = fail = 0
 for status, item, detail in results:
     print(f"[{status}] {item}  {detail}")
     if status == "OK":
         ok += 1
     elif status == "WARN":
         warn += 1
+    elif status == "INFO":
+        info += 1
     else:
         fail += 1
 print()
-print(f"summary: OK={ok} WARN={warn} FAIL={fail}")
+print(f"summary: OK={ok} WARN={warn} INFO={info} FAIL={fail}")
