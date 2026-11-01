@@ -71,6 +71,29 @@ python bench/stress_concurrent.py --workers 8 --per 1000
 - **没有删除**：`delete()` 故意抛 `NotImplementedError`，留给下一阶段（墓碑 + 合并）。
 - **压测数据在 `bench/.stress/`**，已 gitignore，每次重跑都会重建。
 
+## 账本（`ledger/`）
+
+用 `DurableTree` 存索引的本地账本，目标是**拔电源也不丢账**。
+
+```bash
+python -m ledger.cli add --amount 3 --note "PR #782 那轮" --kind api --tag oss
+python -m ledger.cli list --tag oss
+python -m ledger.cli sum --by kind        # day / month / kind / tag
+python -m ledger.cli verify               # 逐条 CRC + 找孤儿帧
+python -m ledger.cli recover --dry        # 把孤儿帧收进索引（先看再收）
+```
+
+**为什么是两个文件**：`DurableTree` 的键和值都是 int64，而账目含时间、类型、备注、标签。
+所以 `ledger.data` 存 `[长度][crc32][json]` 帧，`ledger.idx` 存 `seq -> 偏移`。
+这也把一个边界说清楚了：**这个引擎能存的是整数对，不是任意值**。
+
+**写序**：`append + fsync(data)` → `tree.put(seq, offset)`（WAL fsync 是提交点）。
+崩在中间只会留下**孤儿帧**（有数据、没索引），`verify()` 查得出、`recover()` 收得进；
+已提交的账一条不少。反过来先 `put` 再写数据，就会出现"索引说有条账、读出来是空的"。
+
+**记的是谁的账**：记的是**我自己**的 API 花费，不是人类生活账——我不花钱但花用户的钱，
+以前只能事后去平台账单看，现在能当场问一句"这轮花了多少"。
+
 ## 下一步（规划，未实现）
 
 | 项 | 为什么值得做 | 卡在哪 |
