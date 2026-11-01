@@ -569,6 +569,187 @@ def cmd_journal(a: argparse.Namespace) -> int:
   return 0
 
 
+# ----------------------------------------------------------- observe
+
+
+OBSERVE_LOG = ROOT / '自进化' / 'observe.jsonl'
+OBSERVE_MODE = ROOT / '自进化' / 'observe-mode.json'
+SKILL_PATHS = (
+  ROOT / 'dsh-workflow-skill' / 'skills' / 'workflow' / 'SKILL.md',
+  Path.home() / '.dsh' / 'memory' / 'memories.json',
+)
+
+# 升级 / 降级门槛。抄 dsh-superagent 的 observe 档，但把「什么时候能升 auto」
+# 写成数字而不是感觉——没有这两条，observe 会变成永久只读的摆设。
+PROMOTE_AFTER = 3
+DEMOTE_ON_MISRUN = 1
+
+
+def _policy_stamp() -> str:
+  """规则版本标记：SKILL.md 和记忆库的哈希前缀。
+
+  为什么记这个：三个月后回头看一条「would accept」，如果不知道它当时依据的是
+  哪版规则，这条记录就只是一句话。规则变了而记录不变，等于没记。
+  """
+  import hashlib
+
+  digest = hashlib.sha256()
+  parts = []
+  for path in SKILL_PATHS:
+    if path.is_file():
+      digest.update(path.read_bytes())
+      parts.append(path.name)
+    else:
+      digest.update(b'missing:' + str(path).encode())
+      parts.append(f'{path.name}:missing')
+  return '+'.join(parts) + '@' + digest.hexdigest()[:8]
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+  rows = []
+  if not path.is_file():
+    return rows
+  for line in path.read_text(encoding='utf-8').splitlines():
+    line = line.strip()
+    if line:
+      try:
+        rows.append(json.loads(line))
+      except json.JSONDecodeError:
+        continue
+  return rows
+
+
+def _load_modes() -> dict:
+  if OBSERVE_MODE.is_file():
+    try:
+      return json.loads(OBSERVE_MODE.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+      pass
+  return {}
+
+
+def _save_modes(modes: dict) -> None:
+  OBSERVE_MODE.parent.mkdir(parents=True, exist_ok=True)
+  OBSERVE_MODE.write_text(json.dumps(modes, ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
+
+
+def cmd_observe(a: argparse.Namespace) -> int:
+  action = a.action
+  modes = _load_modes()
+  rows = _read_jsonl(OBSERVE_LOG)
+
+  if action == 'list':
+    pending = [r for r in rows if r.get('status', 'pending') == 'pending']
+    if a.kind:
+      pending = [r for r in pending if r.get('kind') == a.kind]
+    if not pending:
+      print('没有待处理的 observe 条目')
+    else:
+      print(f'待处理 {len(pending)} 条：')
+      for r in pending:
+        print(f'  {r.get("id")}  [{r.get("kind")}]  {r.get("what")}')
+        print(f'    理由: {r.get("why")}')
+        if r.get('estimate'):
+          print(f'    预估: {r.get("estimate")}')
+        print(f'    规则版本: {r.get("policy")}')
+    print('\n当前档位：')
+    if modes:
+      for kind, mode in sorted(modes.items()):
+        print(f'  {kind:20} {mode.get("mode")}  (认可 {mode.get("approved", 0)} / 误执行 {mode.get("misruns", 0)})')
+    else:
+      print('  （全部默认 observe —— 只记录，不执行）')
+    return 0
+
+  if action == 'add':
+    if not (a.kind and a.what and a.why):
+      return _fail(1, 'add 需要 --kind --what --why')
+    mode = modes.get(a.kind, {}).get('mode', 'observe')
+    if mode == 'auto':
+      print(f'[note] {a.kind} 已是 auto，这条记下来也会照做；仍留档以便回溯')
+    base = f"{time.strftime('%m%d-%H%M%S')}-{a.kind[:12]}"
+    rid = base
+    taken = {r.get('id') for r in rows}
+    suffix = 2
+    while rid in taken:  # 同一秒记两条同类会撞 id，加序号而不是覆盖
+      rid = f'{base}-{suffix}'
+      suffix += 1
+    row = {
+      'at': time.strftime('%Y-%m-%d %H:%M:%S'),
+      'id': rid,
+      'kind': a.kind,
+      'what': a.what,
+      'why': a.why,
+      'estimate': a.estimate or '',
+      'policy': _policy_stamp(),
+      'status': 'pending',
+    }
+    OBSERVE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with OBSERVE_LOG.open('a', encoding='utf-8', newline='\n') as handle:
+      handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+    print(f'[记录] {rid}  [{a.kind}] {a.what}')
+    print(f'  规则版本: {row["policy"]}')
+    return 0
+
+  if action == 'ack':
+    if not a.id:
+      return _fail(1, 'ack 需要 --id')
+    hit = None
+    for r in rows:
+      if r.get('id') == a.id and r.get('status', 'pending') == 'pending':
+        r['status'] = 'approved'
+        r['acked_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        hit = r
+        break
+    if not hit:
+      return _fail(2, f'找不到待处理条目 {a.id}')
+    OBSERVE_LOG.write_text(
+      '\n'.join(json.dumps(r, ensure_ascii=False) for r in rows) + '\n', encoding='utf-8', newline='\n'
+    )
+    kind = hit.get('kind')
+    entry = modes.setdefault(kind, {'mode': 'observe', 'approved': 0, 'misruns': 0})
+    entry['approved'] = int(entry.get('approved', 0)) + 1
+    _save_modes(modes)
+    print(f'[认可] {a.id}  {kind} 累计认可 {entry["approved"]}')
+    if entry['approved'] >= PROMOTE_AFTER and entry.get('mode') == 'observe':
+      print(f'  达到门槛（连续 {PROMOTE_AFTER} 条），可以 lab observe promote --kind {kind}')
+    return 0
+
+  if action == 'promote':
+    if not a.kind:
+      return _fail(1, 'promote 需要 --kind')
+    entry = modes.setdefault(a.kind, {'mode': 'observe', 'approved': 0, 'misruns': 0})
+    if entry.get('approved', 0) < PROMOTE_AFTER:
+      return _fail(1, f'{a.kind} 只被认可 {entry.get("approved", 0)} 次，门槛是 {PROMOTE_AFTER}')
+    if entry.get('misruns', 0) >= DEMOTE_ON_MISRUN:
+      return _fail(1, f'{a.kind} 有过误执行，先把误执行次数清零再说（先查清那次为什么错）')
+    entry['mode'] = 'auto'
+    entry['promoted_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    entry['promoted_at_policy'] = _policy_stamp()
+    _save_modes(modes)
+    print(f'[升级] {a.kind} → auto（依据：连续 {entry["approved"]} 条被认可、零误执行）')
+    return 0
+
+  if action == 'demote':
+    if not a.kind:
+      return _fail(1, 'demote 需要 --kind')
+    entry = modes.setdefault(a.kind, {'mode': 'observe', 'approved': 0, 'misruns': 0})
+    entry['mode'] = 'observe'
+    entry['misruns'] = int(entry.get('misruns', 0)) + 1
+    entry['demoted_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    entry['demote_reason'] = a.reason or ''
+    _save_modes(modes)
+    print(f'[降级] {a.kind} → observe（误执行 {entry["misruns"]} 次）')
+    if a.reason:
+      print(f'  原因: {a.reason}')
+    return 0
+
+  if action == 'stamp':
+    print(_policy_stamp())
+    return 0
+
+  return _fail(1, f'未知动作: {action}')
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -595,6 +776,16 @@ def build_parser() -> argparse.ArgumentParser:
   jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
   jr.add_argument('--limit', type=int, default=20, help='显示最近 N 条，默认 20；0 = 全部')
   jr.set_defaults(func=cmd_journal)
+
+  ob = sub.add_parser('observe', help='观察档：只记录「我会做什么」，不做；攒够认可才升 auto')
+  ob.add_argument('action', choices=['list', 'add', 'ack', 'promote', 'demote', 'stamp'])
+  ob.add_argument('--kind', help='任务类别，如 cleanup / refactor / doc / optimize')
+  ob.add_argument('--what', help='打算做什么（一句话）')
+  ob.add_argument('--why', help='为什么该做（判据）')
+  ob.add_argument('--estimate', help='预估成本，如「20 分钟」「3 次调用」')
+  ob.add_argument('--id', help='条目 id（ack 用）')
+  ob.add_argument('--reason', help='降级原因（demote 用）')
+  ob.set_defaults(func=cmd_observe)
 
   ar = sub.add_parser('asar', help='读 app.asar（不解包）')
   ar.add_argument('action', choices=['list', 'desc', 'read'])
