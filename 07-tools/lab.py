@@ -23,6 +23,9 @@ import json
 import re
 import shutil
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(r'D:\work')
@@ -101,7 +104,7 @@ def cmd_log(a: argparse.Namespace) -> int:
 
 # ------------------------------------------------------------- stage
 
-# 顺序敏感：长的先替换，否则 `%USERPROFILE%\.dsh` 会先被 `%USERPROFILE%` 吃掉
+# 顺序敏感：长的先替换，否则 `~/.dsh` 会先被 `~` 吃掉
 SCRUB_RULES = [
   (r'C:\\Users\\<user>\\AppData\\Local', '%LOCALAPPDATA%'),
   (r'C:\\Users\\<user>\\.dsh', '~/.dsh'),
@@ -109,12 +112,12 @@ SCRUB_RULES = [
   (r'E:\\DS公作区\\进阶-20261029', '.'),
   (r'E:\\DS公作区', 'D:\\work'),
   (r'<user>', '<user>'),
-  (r'老板|主人', '用户'),
+  (r'用户|用户', '用户'),
 ]
 
 TEXT_SUFFIXES = {'.md', '.py', '.js', '.mjs', '.json', '.yml', '.yaml', '.txt', '.patch'}
 
-BAD_PATTERN = re.compile(r'C:\\Users\\<user>|E:\\DS公作区|<user>|老板|主人')
+BAD_PATTERN = re.compile(r'C:\\Users\\<user>|E:\\DS公作区|<user>|用户|用户')
 
 SECRET_PATTERNS = [
   ('openai-key', re.compile(r'sk-[A-Za-z0-9_\-]{20,}')),
@@ -217,7 +220,27 @@ def cmd_stage(a: argparse.Namespace) -> int:
       continue
     if path.suffix.lower() not in TEXT_SUFFIXES:
       continue
-    for idx, line in enumerate(path.read_text(encoding='utf-8', errors='replace').splitlines(), 1):
+    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+    # 规则定义行豁免：SCRUB_RULES / BAD_PATTERN / SECRET_PATTERNS 本身就是「要把本机
+    # 路径和密钥找出来替换掉」的规则，扫描器抓自己等于杀软特征库报病毒。只豁免本文件
+    # 里的这三段定义，文件其余部分照抓。
+    rule_lines: set[int] = set()
+    if path.name == Path(__file__).name:
+      in_block = False
+      for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith('SCRUB_RULES = [') or s.startswith('SECRET_PATTERNS = ['):
+          in_block = True
+        if s.startswith('BAD_PATTERN ='):
+          rule_lines.add(i)
+          continue
+        if in_block:
+          rule_lines.add(i)
+          if s == ']':
+            in_block = False
+    for idx, line in enumerate(lines, 1):
+      if idx - 1 in rule_lines:
+        continue
       if BAD_PATTERN.search(line):
         path_hits += 1
         if path_hits <= 10:
@@ -335,6 +358,139 @@ def cmd_asar(a: argparse.Namespace) -> int:
   return 0
 
 
+# ---------------------------------------------------------------- github
+
+
+def _token() -> str:
+  p = Path.home() / '.dsh' / 'github-token.txt'
+  if not p.exists():
+    raise SystemExit('[FAIL:能力缺失] 没有 GitHub token，先跑 github_device_login.py')
+  return p.read_text(encoding='utf-8').strip()
+
+
+def _gh(method: str, path: str, payload=None) -> tuple[int, dict]:
+  data = json.dumps(payload).encode('utf-8') if payload is not None else None
+  headers = {
+    'Accept': 'application/vnd.github+json',
+    'Authorization': f'Bearer {_token()}',
+    'User-Agent': 'lab/1.0',
+    'X-GitHub-Api-Version': '2022-11-28',
+  }
+  if data:
+    headers['Content-Type'] = 'application/json'
+  req = urllib.request.Request(f'https://api.github.com{path}', data=data, method=method, headers=headers)
+  try:
+    with urllib.request.urlopen(req, timeout=45) as r:
+      body = r.read().decode('utf-8')
+      return r.status, (json.loads(body) if body.strip() else {})
+  except urllib.error.HTTPError as e:
+    return e.code, {'error': e.read().decode('utf-8', 'replace')[:300]}
+
+
+def _slug(a: argparse.Namespace) -> str:
+  slug = getattr(a, 'repo', None)
+  if slug:
+    return slug
+  cfg = ROOT / 'tools' / 'gh-login' / 'ghctl-default.txt'
+  if cfg.exists():
+    return cfg.read_text(encoding='utf-8').strip()
+  return 'Uneadlight/fatfish-lab'
+
+
+def cmd_ci(a: argparse.Namespace) -> int:
+  sha = a.sha or 'HEAD'
+  if a.wait:
+    print(f'等 {a.wait}s 让 CI 起来 …')
+    time.sleep(a.wait)
+
+  slug = _slug(a)
+  code, data = _gh('GET', f'/repos/{slug}/commits/{sha}/check-runs')
+  if code != 200:
+    print(f'[FAIL:执行失败] check-runs {code}: {data.get("error", "")}')
+    return 1
+
+  runs = data.get('check_runs', [])
+  print(f'{slug} @ {sha} → {len(runs)} 个 check run')
+  if not runs:
+    print('  （还没有 run，可能仍在排队）')
+  for r in runs:
+    print(f'  {r["name"]:<30} {r["status"]:<12} {r.get("conclusion") or "-"}')
+
+  code2, st = _gh('GET', f'/repos/{slug}/commits/{sha}/status')
+  if code2 == 200:
+    print(f'合并状态：{st.get("state")}（{st.get("total_count", 0)} 个 status）')
+
+  pending = [r for r in runs if r['status'] != 'completed']
+  failed = [r for r in runs if r.get('conclusion') not in (None, 'success', 'skipped')]
+  if pending:
+    print(f'\n[WAIT] 还有 {len(pending)} 个未完成')
+    return 2
+  if failed:
+    print(f'\n[FAIL] {len(failed)} 个失败')
+    return 1
+  if runs:
+    print('\n[OK] 全部通过')
+  return 0
+
+
+def cmd_plugins(a: argparse.Namespace) -> int:
+  base = Path(a.profile) if a.profile else Path.home() / '.dsh' / 'profiles' / 'desktop'
+  pkg = base / 'package.json'
+  if not pkg.exists():
+    return _fail(2, f'找不到 profile: {pkg}')
+  deps = json.loads(pkg.read_text(encoding='utf-8')).get('dependencies', {})
+  node = base / 'node_modules'
+
+  rows: list[tuple[str, str, str, str]] = []
+  for name in sorted(deps):
+    meta_path = node / name / 'package.json'
+    if not meta_path.exists():
+      rows.append((name, 'MISSING', '', ''))
+      continue
+    try:
+      meta = json.loads(meta_path.read_text(encoding='utf-8'))
+    except Exception as exc:  # noqa: BLE001 - 坏 JSON 也要列出来
+      rows.append((name, 'BADJSON', '', str(exc)[:40]))
+      continue
+    client = 'Y' if (meta.get('dsh') or {}).get('client') else '-'
+    desc = ' '.join(str(meta.get('description') or '').split())[:88]
+    rows.append((name, str(meta.get('version') or ''), client, desc))
+
+  for name, ver, client, desc in rows:
+    print(f'{name:<34} {ver:<10} {client:<2} {desc}')
+  total = len(rows)
+  with_client = sum(1 for r in rows if r[2] == 'Y')
+  print(f'TOTAL {total}  (client bundle: {with_client})')
+  return 0
+
+
+def cmd_issue(a: argparse.Namespace) -> int:
+  slug = _slug(a)
+  if a.comment_file:
+    text = Path(a.comment_file).read_text(encoding='utf-8')
+    code, data = _gh('POST', f'/repos/{slug}/issues/{a.num}/comments', {'body': text})
+    if code != 201:
+      print(f'[FAIL:执行失败] comment {code}: {data.get("error", "")}')
+      return 1
+    print(f'[OK] comment {data.get("id")}  {data.get("html_url")}')
+
+  if a.close:
+    code, data = _gh('PATCH', f'/repos/{slug}/issues/{a.num}', {'state': 'closed', 'state_reason': 'completed'})
+    if code != 200:
+      print(f'[FAIL:执行失败] close {code}: {data.get("error", "")}')
+      return 1
+    print(f'[OK] issue closed  state={data.get("state")}  reason={data.get("state_reason")}')
+
+  if not a.comment_file and not a.close:
+    code, data = _gh('GET', f'/repos/{slug}/issues/{a.num}')
+    if code != 200:
+      print(f'[FAIL:执行失败] issue {code}: {data.get("error", "")}')
+      return 1
+    print(f'#{data.get("number")} [{data.get("state")}] {data.get("title")}')
+    print(f'  {data.get("html_url")}')
+  return 0
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -363,6 +519,23 @@ def build_parser() -> argparse.ArgumentParser:
   ar.add_argument('keyword', nargs='?', help='list/desc 的关键字过滤；read 的包内路径')
   ar.add_argument('--max', type=int, default=1200, help='read 最多输出多少字符，0 表示全部')
   ar.set_defaults(func=cmd_asar)
+
+  ci = sub.add_parser('ci', help='查某个 commit 的 CI 状态')
+  ci.add_argument('sha', nargs='?', default='HEAD', help='commit sha，默认 HEAD')
+  ci.add_argument('--wait', type=int, default=0, help='先等 N 秒让 CI 起来')
+  ci.add_argument('--repo', help='owner/name，默认读 ghctl 的默认仓库')
+  ci.set_defaults(func=cmd_ci)
+
+  pl = sub.add_parser('plugins', help='列出 profile 里已装插件的版本 / 客户端 bundle / 描述')
+  pl.add_argument('--profile', help='profile 目录，默认 ~/.dsh/profiles/desktop')
+  pl.set_defaults(func=cmd_plugins)
+
+  iss = sub.add_parser('issue', help='看 / 评论 / 关 issue')
+  iss.add_argument('num', type=int, help='issue 编号')
+  iss.add_argument('--comment-file', dest='comment_file', help='把这个 markdown 文件作为评论发出去')
+  iss.add_argument('--close', action='store_true', help='评论之后（或单独）关闭')
+  iss.add_argument('--repo', help='owner/name')
+  iss.set_defaults(func=cmd_issue)
 
   return parser
 

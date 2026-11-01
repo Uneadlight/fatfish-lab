@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -18,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ledger.store import LedgerError, LedgerStore
 
-DEFAULT_PREFIX = Path(r'E:\DS公作区\自进化\ledger') / 'ledger'
+# 账本默认落在 `~/.dsh/ledger/`（用 `--file` 或环境变量 `LEDGER_DIR` 可换位置）。
+# 不写死机器上的绝对路径：这个仓库是公开的。
+DEFAULT_PREFIX = Path(os.environ.get('LEDGER_DIR') or Path.home() / '.dsh' / 'ledger') / 'ledger'
 
 
 def parse_when(text: str) -> int:
