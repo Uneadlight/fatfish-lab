@@ -3,6 +3,11 @@
 为什么需要它：`git commit -m "中文"` 在 Windows 上会被按 GBK 转码，
 终端看着正常，`git cat-file commit HEAD` 出来的是乱码——判据永远是原始字节。
 
+推送默认带 GitHub token（从 `~/.dsh/github-token.txt` 读），走
+`http.extraheader` 注入，token 不会落进 `.git/config`；同时清空 credential
+helper，避免 git 在无凭据时去弹框（那会报
+`could not read Username for 'https://github.com'`）。
+
 用法：
   py tools/lab/git_commit.py --repo "E:\\DS公作区\\架构文档" \\
      --files a.md b.md --msg-file tools/lab/_msg_docs.txt
@@ -11,11 +16,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 GIT = r"D:\work\tools\git\cmd\git.exe"
+TOKEN_FILE = Path.home() / ".dsh" / "github-token.txt"
+
+PUSH_TRIES = 3
+PUSH_BACKOFF_SECONDS = 5
 
 
 def run(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -31,6 +42,45 @@ def run(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         print(p.stderr.strip())
         sys.exit(1)
     return p
+
+
+def auth_args() -> list[str]:
+    """token 注入参数；没有 token 就返回空（公开仓库只读推送会失败，由调用方兜底）。"""
+    try:
+        token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    if not token:
+        return []
+    b64 = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return [
+        "-c",
+        f"http.extraheader=AUTHORIZATION: basic {b64}",
+        # 清空 credential helper：带 extraheader 就不需要它，留着反而会弹框
+        "-c",
+        "credential.helper=",
+        # GitHub 上 HTTP/2 偶发 "Connection was reset"，固定 1.1 更稳
+        "-c",
+        "http.version=HTTP/1.1",
+        "-c",
+        "http.postBuffer=524288000",
+    ]
+
+
+def push_branch(repo: Path, branch: str, tries: int = PUSH_TRIES) -> bool:
+    extra = auth_args()
+    for attempt in range(1, tries + 1):
+        p = run(repo, *extra, "push", "origin", branch, check=False)
+        if p.returncode == 0:
+            print(f"[push] OK（第 {attempt} 次）")
+            return True
+        last = (p.stderr.strip().splitlines() or ["?"])[-1]
+        print(f"[push] 第 {attempt}/{tries} 次失败: {last}")
+        if attempt < tries:
+            time.sleep(PUSH_BACKOFF_SECONDS * attempt)
+    print("[push] 全部失败。手动重试：")
+    print(f"  git -C {repo} " + " ".join(extra) + f" push origin {branch}")
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -80,20 +130,19 @@ def main(argv: list[str]) -> int:
     subject = next((line for line in raw.splitlines()[4:] if line.strip()), "")
     print(f"[commit] {head}  {subject}")
 
+    pushed = True
     if not a.no_push:
         remotes = run(repo, "remote").stdout.split()
         if not remotes:
             print("[push] 无 remote，跳过")
         else:
             branch = run(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-            p = run(repo, "push", "origin", branch, check=False)
-            print(f"[push] {'OK' if p.returncode == 0 else 'FAILED'}")
-            if p.returncode != 0:
-                print(p.stderr.strip())
+            pushed = push_branch(repo, branch)
 
     status = run(repo, "status", "--short").stdout.strip()
     print(f"[status] {'干净' if not status else status}")
-    return 0
+    # 提交成功但推送失败必须返回非 0，否则调用方会以为闭环了
+    return 0 if pushed else 1
 
 
 if __name__ == "__main__":
