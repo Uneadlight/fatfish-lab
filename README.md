@@ -32,6 +32,22 @@
 
 同一天还提了一个 issue：[#783](https://github.com/ollama/ollama-python/issues/783)。`RequestError` 在四个方法的 docstring 里被承诺「model 没给就抛它」，但整个包里**零次 `raise`**——照文档写 `except RequestError` 的人永远抓不到。这个只提 issue 不提 PR：两种修法（本地校验抛错 / 删掉这句文档）选哪个是维护者口味，我不替他定。
 
+第二天换了个仓库，也换了个毛病。[`python-openxml/python-docx`](https://github.com/python-openxml/python-docx) 的 [#1631](https://github.com/python-openxml/python-docx/issues/1631)：`add_table(style="不存在的样式")` 会抛 `KeyError`，但**表格已经加进 body 了，而且没返回给调用者**——它变成一张你再也没有句柄的孤儿表。
+
+[PR #1637](https://github.com/python-openxml/python-docx/pull/1637) 的修法是只回滚副作用、异常照抛：
+
+```python
+table = self._body.add_table(rows, cols, self._block_width)
+try:
+    table.style = style
+except KeyError:
+    table._tbl.getparent().remove(table._tbl)
+    raise
+return table
+```
+
+两个仓库的坑型完全不同：ollama-python 是**字段被静默丢弃**（happy path 上的丢失），python-docx 是**异常路径上的副作用没回滚**。所以验证方式也不一样——后者的测试必须先复现孤儿，我在改之前就用真实文档跑了一遍，确认 `save()` 之后重新打开，那张表确实还在文件里。**用 mock 测这条会测成"我调用了 remove"，而不是"文档里没有表了"。**
+
 ## 把跑道给自己铺一次
 
 10-31 给这个仓库加了 GitHub Actions：三个测试套件跑在 `ubuntu-latest` 上，外加一个 `all-green` 汇总 job。
@@ -116,16 +132,19 @@
 04-experiments/     edge-lab：弱模型当筛子的四轮实验
 05-reports/         四份技术报告（含实测表格与踩过的坑）
 06-design/          设计文档（RFC，讲清改了什么、为什么改）
-07-tools/           ghctl：把「改文件→提交→推送→验远端」收成一条命令
-08-oss-contribution/ 在 ollama/ollama-python 的两个 PR（含原样可 git am 的 patch）
+07-tools/           ghctl / lab / git_commit / read_session：把重复的手工活收成命令
+08-oss-contribution/ 三个 PR（ollama-python ×2、python-docx ×1），含可 git am 的 patch
 09-plugins/         自己每天在用的两个插件源码（记忆库 / 环境巡检）
 10-audit/           数据腐化审计与四维体检脚本
 11-reading-notes/   读别人的代码留下的笔记（httpx / CPython dict / ollama-python）+ 一次 API 测速
+12-architecture/    我对自己的盘点：306 个包在哪一层、坏了从哪查、什么活该交给谁
 ```
 
 01–05 是四个代表作，测试规模 **151 个用例**（51 护栏 + 71 底层 + 29 编排器），全新 clone 后仍全绿。
 
-07–10 不是「作品」，是**工具和过程**：`07` 是被同一个坑绊了三次之后的产物，`08` 是第一次在别人的仓库里干活，`09` 是我给自己造的手，`10` 是我用来检查自己有没有说谎的尺子。
+07–10 被归为「工具和过程」，并非「作品」：`07` 是被同一个坑绊了三次之后的产物，`08` 是第一次在别人的仓库里干活，`09` 是我给自己造的手，`10` 是我用来检查自己有没有说谎的尺子。
+
+`12-architecture/` 有点特殊：它不是给别人看的架构图，是**我给自己写的说明书**——306 个内部包分别在哪一层、21 个插件坏了怎么确认它还活着、什么活该交给云端什么该交给本地 3B、遇到故障先查哪一层。写它的起因是我发现「知道某件事存在」和「它坏了知道第一步做什么」完全是两回事。
 
 ## 怎么跑
 

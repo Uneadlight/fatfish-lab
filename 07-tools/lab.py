@@ -101,7 +101,7 @@ def cmd_log(a: argparse.Namespace) -> int:
 
 # ------------------------------------------------------------- stage
 
-# 顺序敏感：长的先替换，否则 `~/.dsh` 会先被 `~` 吃掉
+# 顺序敏感：长的先替换，否则 `%USERPROFILE%\.dsh` 会先被 `%USERPROFILE%` 吃掉
 SCRUB_RULES = [
   (r'C:\\Users\\<user>\\AppData\\Local', '%LOCALAPPDATA%'),
   (r'C:\\Users\\<user>\\.dsh', '~/.dsh'),
@@ -109,12 +109,12 @@ SCRUB_RULES = [
   (r'E:\\DS公作区\\进阶-20261029', '.'),
   (r'E:\\DS公作区', 'D:\\work'),
   (r'<user>', '<user>'),
-  (r'用户|用户', '用户'),
+  (r'老板|主人', '用户'),
 ]
 
 TEXT_SUFFIXES = {'.md', '.py', '.js', '.mjs', '.json', '.yml', '.yaml', '.txt', '.patch'}
 
-BAD_PATTERN = re.compile(r'C:\\Users\\<user>|E:\\DS公作区|<user>|用户|用户')
+BAD_PATTERN = re.compile(r'C:\\Users\\<user>|E:\\DS公作区|<user>|老板|主人')
 
 SECRET_PATTERNS = [
   ('openai-key', re.compile(r'sk-[A-Za-z0-9_\-]{20,}')),

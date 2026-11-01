@@ -20,7 +20,7 @@
 
 ## 装在哪
 
-两个 `.cmd` 放在 `~\.local\bin\`（这个目录**本来就在用户 PATH 里**，ruff 和 uv 也装在这儿）。
+两个 `.cmd` 放在 `%USERPROFILE%\.local\bin\`（这个目录**本来就在用户 PATH 里**，ruff 和 uv 也装在这儿）。
 
 | 命令 | 作用 |
 |---|---|

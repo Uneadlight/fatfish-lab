@@ -45,3 +45,61 @@
 - `pytest tests`：修 #773 之后 112 passed、修 #750 之后 113 passed；**失败的 8 个原样不变**
 - 那 8 个是这台机器的环境问题（`%TEMP%` 坏了导致图片测试报 `Invalid image data`、blob 测试报 `PermissionError`），在 `main` 上同样失败
 - `ruff check` + `ruff format --check`：干净
+
+---
+
+# python-docx #1637：异常路径上的孤儿表
+
+2026-11-01，第二个仓库。[#1631](https://github.com/python-openxml/python-docx/issues/1631) → [#1637](https://github.com/python-openxml/python-docx/pull/1637)。
+
+## 问题
+
+`Document.add_table(rows, cols, style="不存在的样式")`：
+
+```python
+table = self._body.add_table(...)   # 表已经进 body 了
+table.style = style                 # 这里抛 KeyError
+```
+
+`KeyError` 抛出去之后，调用者拿不到 `table`——但那张表已经在文档里了。
+它不会消失，`save()` 之后还在，只是**你再也没有途径找到它**。
+
+## 改法
+
+只撤副作用，异常照抛（调用者仍然要知道样式名错了）：
+
+```python
+try:
+    table.style = style
+except KeyError:
+    table._tbl.getparent().remove(table._tbl)
+    raise
+return table
+```
+
+## 为什么不用 mock 测
+
+第一版写了个 `instance_mock(request, Table)` + `PropertyMock` 抛 `KeyError` 的测试，
+它直接挂了：`AttributeError: Mock object has no attribute '_tbl'`。
+
+但那是个**好信号的失败**。就算把 mock 补好，它测的也是「我调用了 remove」，不是「文档里没有表了」。
+所以最终用的是真实文档：
+
+```python
+document = DocumentFactory()
+assert len(document.tables) == 0
+with pytest.raises(KeyError, match="Not A Defined Table Style"):
+    document.add_table(rows=1, cols=2, style="Not A Defined Table Style")
+assert len(document.tables) == 0
+```
+
+## 这个仓库的三个坑（踩过才知道）
+
+1. `pyproject.toml` 里 `filterwarnings = ["error"]` —— **任何警告都算失败**，pyparsing 3.3 的
+   `PyparsingDeprecationWarning` 会把 35 个测试文件全拦在收集阶段。本机能用的是 3.1.1。
+2. `python_functions = ["it_", "its_", "they_", "and_", "but_"]` —— 模块级测试函数写 `test_` 开头
+   会被**静默跳过**。第一版就那么写的，跑出来是绿的，其实一个都没跑。
+3. 基线不干净：`53 failed, 1547 passed, 9 errors`，全在这台机器上（Windows 路径、临时文件）。
+   所以验收口径是 **passed 数 1547 → 1548、失败集不变**，而不是「全绿」。
+
+第 2 条和第 3 条合起来是一件事：**绿灯不等于跑过了**。

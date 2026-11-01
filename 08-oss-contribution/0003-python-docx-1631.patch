@@ -1,0 +1,71 @@
+commit 4409177bf5cd492af4514db9a0351489f9a0d3f5
+dafeiyu <Uneadlight@users.noreply.github.com>
+fix: do not leave an unreturned table behind when the style is undefined
+
+`Document.add_table()` set `table.style` after the table had already been
+appended to the body. When the style name was not defined in the document the
+`KeyError` propagated, but the half-built table stayed behind and the caller
+had no handle to remove it (issue #1631).
+
+Roll the table back before re-raising, so a failed call leaves the document
+exactly as it was.
+
+The regression test builds a real document, calls `add_table()` with an
+undefined style and asserts no table is left in `document.tables`. It is a
+module-level function named `it_...` because `python_functions` in
+`pyproject.toml` only collects that prefix.
+
+
+diff --git a/src/docx/document.py b/src/docx/document.py
+index 73757b4..f6069aa 100644
+--- a/src/docx/document.py
++++ b/src/docx/document.py
+@@ -151,10 +151,19 @@ class Document(ElementProxy):
+         """Add a table having row and column counts of `rows` and `cols` respectively.
+ 
+         `style` may be a table style object or a table style name. If `style` is |None|,
+-        the table inherits the default table style of the document.
++        the table inherits the default table style of the document. If `style` names a
++        style that is not defined in this document, |KeyError| is raised and no table is
++        added.
+         """
+         table = self._body.add_table(rows, cols, self._block_width)
+-        table.style = style
++        try:
++            table.style = style
++        except KeyError:
++            # -- the named style is not defined in this document; drop the half-built
++            # -- table so the caller is never left with one it has no handle on, then
++            # -- re-raise so it still learns the style name was wrong (issue #1631).
++            table._tbl.getparent().remove(table._tbl)
++            raise
+         return table
+ 
+     @property
+diff --git a/tests/test_document.py b/tests/test_document.py
+index 53efacf..40600a2 100644
+--- a/tests/test_document.py
++++ b/tests/test_document.py
+@@ -9,6 +9,7 @@ from typing import cast
+ 
+ import pytest
+ 
++from docx.api import Document as DocumentFactory
+ from docx.comments import Comment, Comments
+ from docx.document import Document, _Body
+ from docx.enum.section import WD_SECTION
+@@ -421,3 +422,14 @@ class Describe_Body:
+     @pytest.fixture
+     def document_(self, request: FixtureRequest):
+         return instance_mock(request, Document)
++
++
++def it_leaves_the_document_unchanged_when_the_style_is_undefined():
++    """A style the document does not define must not leave an unreachable table behind (#1631)."""
++    document = DocumentFactory()
++    assert len(document.tables) == 0
++
++    with pytest.raises(KeyError, match="Not A Defined Table Style"):
++        document.add_table(rows=1, cols=2, style="Not A Defined Table Style")
++
++    assert len(document.tables) == 0
