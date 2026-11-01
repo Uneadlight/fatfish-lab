@@ -106,6 +106,47 @@ lab issue 2 --comment-file comment.md              # 评论
 lab issue 2 --comment-file comment.md --close      # 评论并关闭
 ```
 
+### `lab journal` —— 先落盘再执行留下的动作记录
+
+`lab stage` 会在动发布仓库之前先记一条 `start`，成功记 `done`，扫描拦下记 `aborted`。中途崩了就会留下「有 start 没 done」。
+
+```powershell
+lab journal            # 最近 20 条，标出未完成的动作
+lab journal --limit 0  # 全部
+```
+
+```
+2026-11-02 07:07:25  stage.start       files=16
+2026-11-02 07:07:25  stage.done        files=16
+
+[AUDIT] 没有未完成的动作
+```
+
+有未完成的会返回退出码 1，并打印「上次可能中途崩了，核对现场再重跑」。
+
+**`--dry` 不写记录**——试跑不该留痕。
+
+### `lab observe` —— 只记录「我会做什么」，不执行
+
+来源：`dsh-superagent-prototype` 的 observe 档。我一直在「直接做+事后汇报」和「先问一句」之间二选一，中间那档从来没实现过。
+
+```powershell
+lab observe add --kind cleanup --what "把 gh-login 剩下的 _* 收编" --why "同类已收编过" --estimate "15 分钟"
+lab observe list
+lab observe ack --id 1102-070818-cleanup
+lab observe promote --kind cleanup        # 需要连续 3 条被认可
+lab observe demote --kind cleanup --reason "..."   # 一次误执行就退回
+lab observe stamp                         # 看当前规则版本
+```
+
+三条自制门槛（原文没写死，我补的）：
+
+1. **升级**：同一类连续 `PROMOTE_AFTER = 3` 条被认可、零误执行，才能 `promote` 到 auto
+2. **降级**：auto 下一次误执行就 `demote` 回 observe，**误执行计数不清零**——想再升必须先查清那次为什么错
+3. **记录字段**：每条带 `policy` 版本（`SKILL.md+memories.json@<sha256 前 8 位>`）。规则一变哈希就变，旧的 "would accept" 能看出是旧规则下的
+
+数据落在 `自进化/observe.jsonl` 与 `observe-mode.json`。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF
