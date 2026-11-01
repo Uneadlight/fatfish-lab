@@ -22,14 +22,18 @@
 //   done             终态
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const DIR = path.resolve(__dirname);
 const BOX = path.join(DIR, 'box.json');
 const LOG = path.join(DIR, 'box.log.jsonl');
 const LOCK = path.join(DIR, 'box.lock');
-const LOCK_TIMEOUT_MS = 5000;
-const LOCK_STALE_MS = 60000;
+const LOCK_TIMEOUT_MS = Number(process.env.DISPATCH_LOCK_TIMEOUT_MS || 5000);
+// 陈旧判定的兜底阈值。主判据是 PID 存活检查（见 looksStale），这个时间只管
+// 「owner.json 读不到」的情况——比如刚 mkdir 还没写进内容的瞬间，给一段宽限期。
+// 原来的 60 秒是拍脑袋定的：一个跑 90 秒的活会被另一个进程当成死锁清掉。
+const LOCK_STALE_MS = Number(process.env.DISPATCH_LOCK_STALE_MS || 600000);
 
 const STAGES = [
   'person:delivery',
@@ -66,35 +70,99 @@ function sleepMs(ms) {
 }
 
 // 目录锁：mkdirSync 在 Windows/POSIX 上都是原子的（已存在就抛 EEXIST）。
+//
+// 陈旧判定不能只看时间。原来的写法是「目录 mtime 超过 60 秒就当持锁进程死了」，
+// 这有两个洞：①60 秒是随便定的，一个跑 90 秒的活会被别人清掉锁，两个写者同时
+// 进来；②rmdirSync 遇到目录里还有文件（比如 owner.json）会抛 ENOTEMPTY，而
+// catch 里的 continue 跳过了超时检查 → 无限循环，进程卡死。
+//
+// 现在主判据是 PID 存活：锁里写 owner.json{pid,host,at}，同主机上
+// process.kill(pid, 0) 抛 ESRCH 才算死。时间只做「读不到 owner.json」的兜底。
+function readOwner() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(LOCK, 'owner.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // ESRCH = 进程不存在；EPERM = 进程在但没权限发信号，当成活着
+    return e.code !== 'ESRCH';
+  }
+}
+
+function looksStale() {
+  const owner = readOwner();
+  if (owner && owner.host === os.hostname() && Number.isInteger(owner.pid)) {
+    return pidAlive(owner.pid)
+      ? { stale: false, why: `持锁进程 ${owner.pid} 还活着` }
+      : { stale: true, why: `持锁进程 ${owner.pid} 已不存在` };
+  }
+  let mtimeMs;
+  try {
+    mtimeMs = fs.statSync(LOCK).mtimeMs;
+  } catch {
+    return { stale: false, why: '锁刚被释放' };
+  }
+  const age = Date.now() - mtimeMs;
+  return age > LOCK_STALE_MS
+    ? { stale: true, why: `无主锁已存在 ${Math.round(age / 1000)}s` }
+    : { stale: false, why: `无主锁才 ${Math.round(age / 1000)}s，可能正在初始化` };
+}
+
 function withLock(fn) {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
+    let acquired = false;
     try {
       fs.mkdirSync(LOCK);
-      break;
+      acquired = true;
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      // 陈旧锁：进程可能崩在持锁期间。超过 60 秒就当它死了。
-      try {
-        const st = fs.statSync(LOCK);
-        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          fs.rmdirSync(LOCK);
-          continue;
-        }
-      } catch {
-        continue; // 锁刚被释放，直接重试
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`等锁超时（${LOCK_TIMEOUT_MS}ms）：${LOCK}`);
-      }
-      sleepMs(50);
     }
+
+    if (acquired) {
+      try {
+        fs.writeFileSync(
+          path.join(LOCK, 'owner.json'),
+          JSON.stringify({ pid: process.pid, host: os.hostname(), at: Date.now() }),
+          'utf8'
+        );
+      } catch {
+        /* owner 写不进去不致命，退化成时间兜底 */
+      }
+      break;
+    }
+
+    const { stale, why } = looksStale();
+    if (stale) {
+      try {
+        fs.rmSync(LOCK, { recursive: true, force: true });
+      } catch {
+        /* 清不掉就下一轮再看 */
+      }
+      // 注意：清理后要回到超时检查，不能无条件 continue —— 那正是原来的死循环
+      if (Date.now() > deadline) {
+        throw new Error(`等锁超时（${LOCK_TIMEOUT_MS}ms）：${LOCK}（清掉陈旧锁「${why}」后仍拿不到）`);
+      }
+      continue;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`等锁超时（${LOCK_TIMEOUT_MS}ms）：${LOCK}（${why}）`);
+    }
+    sleepMs(50);
   }
+
   try {
     return fn();
   } finally {
     try {
-      fs.rmdirSync(LOCK);
+      fs.rmSync(LOCK, { recursive: true, force: true });
     } catch {
       /* 锁已经没了，不影响 */
     }
@@ -185,11 +253,14 @@ function replay(events) {
   return { tasks };
 }
 
-function writeSnapshot(data) {
+function writeSnapshot(data, eventCount) {
   const tmp = BOX + '.tmp';
+  // _meta 让「快照是哪一刻、由几条事件生成的」跟着快照走。
+  // 没有它，快照和事件流差了几条只能靠猜——那正是"不知道自己断过"。
+  const payload = { _meta: { events: eventCount, writtenAt: now() }, tasks: data.tasks };
   const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeSync(fd, JSON.stringify(data, null, 2) + '\n');
+    fs.writeSync(fd, JSON.stringify(payload, null, 2) + '\n');
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -201,7 +272,8 @@ function writeSnapshot(data) {
 function commit(ev) {
   return withLock(() => {
     const row = appendEvent(ev);
-    writeSnapshot(replay(readLog()));
+    const events = readLog();
+    writeSnapshot(replay(events), events.length);
     return row;
   });
 }
@@ -316,15 +388,52 @@ if (cmd === 'add') {
   // 从事件流重建快照。快照坏了、或者怀疑它和 log 不同步时跑这个。
   const events = readLog();
   const data = replay(events);
-  writeSnapshot(data);
+  writeSnapshot(data, events.length);
+  fs.writeFileSync(
+    path.join(DIR, 'box.meta.json'),
+    JSON.stringify({ lastReplayAt: now(), lastReplayEvents: events.length }, null, 2) + '\n',
+    'utf8'
+  );
   console.log(`REPLAYED  ${events.length} events  ->  ${data.tasks.length} tasks`);
   data.tasks.forEach(t => show(t, false));
 } else if (cmd === 'audit') {
-  // 对账：快照 vs 事件流，以及"有 in-flight 迹象却没落终态"的单
+  // 对账：快照 vs 事件流，以及"有 in-flight 迹象却没落终态"的单。
+  // 还要能回答「我重启过吗」——所以额外报：快照的生成时刻/条数、上次手动 replay、
+  // 有没有残留锁。这三样任何一样有动静，就说明中间断过一次。
   const events = readLog();
   const fromLog = replay(events);
   const snap = loadSnapshot();
+  const snapMeta = snap._meta || {};
   let bad = 0;
+
+  console.log(`[LOG]      事件流 ${events.length} 条${events.length ? `，最近一条 ${events[events.length - 1].at}` : ''}`);
+  console.log(`[SNAPSHOT] 快照由 ${snapMeta.events ?? '?'} 条事件生成于 ${snapMeta.writtenAt || '-'}`);
+  if (typeof snapMeta.events === 'number' && snapMeta.events !== events.length) {
+    console.log(`[GAP]      有 ${events.length - snapMeta.events} 条事件没进快照 —— 跑 replay 修`);
+    bad++;
+  }
+  const metaPath = path.join(DIR, 'box.meta.json');
+  if (fs.existsSync(metaPath)) {
+    try {
+      const m = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      console.log(`[REPLAY]   上次手动 replay：${m.lastReplayAt}（当时 ${m.lastReplayEvents} 条事件）`);
+    } catch {
+      console.log('[REPLAY]   box.meta.json 读不出来');
+    }
+  } else {
+    console.log('[REPLAY]   上次手动 replay：从未');
+  }
+  if (fs.existsSync(LOCK)) {
+    const o = readOwner();
+    const who = o ? `pid ${o.pid} ${pidAlive(o.pid) ? '还活着（有进程正在写）' : '已不存在（上次崩在持锁期间）'}` : '没有 owner 信息';
+    console.log(`[LOCK]     有残留锁：${who}`);
+    // audit 是离线检查：正常收工一定清锁，所以只要还有锁，上次就是异常退出。
+    // 读不到 owner 也算——那正好是「崩在 mkdir 之后、写 owner 之前」的形状。
+    bad++;
+  } else {
+    console.log('[LOCK]     无残留锁');
+  }
+
   if (fromLog.tasks.length !== snap.tasks.length) {
     console.log(`[DIFF] 事件流 ${fromLog.tasks.length} 单 / 快照 ${snap.tasks.length} 单 —— 跑 replay 修`);
     bad++;
