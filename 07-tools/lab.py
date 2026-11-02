@@ -525,6 +525,139 @@ def cmd_issue(a: argparse.Namespace) -> int:
 # ------------------------------------------------------------ journal
 
 
+def cmd_commit(a: argparse.Namespace) -> int:
+  """提交 + 推送：一次绕开四个坑（中文 message 编码、token 落进 .git/config、
+  非临时性失败也重试、推完不回读校验）。
+
+  这四条都是 2026-10-30~11-02 真实踩过的，每写一次提交脚本就要重新填一遍坑。
+  """
+  import base64
+  import subprocess
+  import tempfile
+
+  git = Path(r'D:\work\tools\git\cmd\git.exe')
+  if not git.exists():
+    print(f'[FAIL:能力缺失] 找不到便携版 git：{git}')
+    return 2
+
+  repo = Path(a.repo).expanduser().resolve() if a.repo else ROOT / 'repos' / 'dafeiyu-lab'
+  if not (repo / '.git').exists():
+    print(f'[FAIL:用途错误] 不是 git 仓库：{repo}')
+    return 2
+
+  if a.msg_file:
+    text = Path(a.msg_file).read_text(encoding='utf-8')
+  elif a.message:
+    text = a.message
+  else:
+    print('[FAIL:用途错误] 需要 -m/--message 或 --msg-file')
+    return 2
+  text = text.replace('\r\n', '\n').lstrip('\ufeff').strip()
+  if not text:
+    print('[FAIL:用途错误] message 是空的')
+    return 2
+
+  def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    r = subprocess.run((str(git), '-C', str(repo), *args),
+                       capture_output=True, text=True, encoding='utf-8')
+    if check and r.returncode != 0:
+      raise RuntimeError((r.stderr or r.stdout).strip()[:600])
+    return r
+
+  try:
+    # ── 1. 暂存 ──────────────────────────────────────────────
+    if a.files:
+      run('add', '--', *a.files)
+    elif a.all:
+      run('add', '-A')
+    else:
+      # 默认只暂存已跟踪文件的改动：不把没打算提交的新文件顺手带进去
+      run('add', '-u')
+    staged = [x for x in run('diff', '--cached', '--name-only').stdout.splitlines() if x.strip()]
+
+    ahead = run('rev-list', '--count', '@{u}..HEAD', check=False)
+    unpushed = int(ahead.stdout.strip() or 0) if ahead.returncode == 0 else -1
+
+    # 「暂存区为空就收工」是 ghctl 那次踩过的坑：commit 成功、push 失败后再跑，
+    # 什么都不做，用户以为推上去了其实没有。所以这里要再问一句有没有别的活。
+    if not staged:
+      if unpushed == 0:
+        print('[OK] 没有改动、也没有未推送的提交，无事可做')
+        return 0
+      if unpushed > 0:
+        print(f'[INFO] 没有新改动，但有 {unpushed} 个提交没推上去 → 只推送')
+      else:
+        print('[WARN] 没有改动，也判断不出有没有未推送（当前分支没有上游）；不猜，退出')
+        return 1
+
+    if a.dry:
+      print(f'[DRY] 仓库：{repo}')
+      print(f'[DRY] 待暂存：{len(staged)} 个文件' + (f'，如 {staged[0]}' if staged else ''))
+      print(f'[DRY] 首行：{text.splitlines()[0]}')
+      return 0
+
+    # ── 2. 提交（message 走文件：Windows 命令行参数按 GBK 传，中文 -m 会落库变乱码）
+    if staged:
+      with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='\n',
+                                       suffix='.txt', delete=False) as fh:
+        fh.write(text + '\n')
+        mfile = fh.name
+      try:
+        run('-c', 'i18n.commitEncoding=utf-8', 'commit', '-F', mfile)
+      finally:
+        Path(mfile).unlink(missing_ok=True)
+
+      got = run('log', '-1', '--pretty=%B').stdout.strip()
+      if got.splitlines()[0] != text.splitlines()[0]:
+        print('[FAIL:执行失败] 提交说明回读不一致（编码可能出问题）')
+        print('  想要：' + text.splitlines()[0])
+        print('  实际：' + got.splitlines()[0])
+        return 1
+      print('[OK] commit ' + run('log', '-1', '--oneline').stdout.strip())
+
+    if a.no_push:
+      print('[OK] --no-push，跳过推送')
+      return 0
+
+    # ── 3. 推送（只对临时性失败重试）─────────────────────────
+    token_file = Path.home() / '.dsh' / 'github-token.txt'
+    if not token_file.exists():
+      print(f'[FAIL:权限被拒] 没有 token 文件：{token_file}')
+      print('  你可能要做什么：跑一次 tools/gh-login/github_device_login.py 授权')
+      return 2
+    token = token_file.read_text(encoding='utf-8').strip()
+    hdr = 'AUTHORIZATION: basic ' + base64.b64encode(f'x-access-token:{token}'.encode()).decode()
+
+    TRANSIENT = ('connection reset', 'connection refused', 'timed out', 'recv failure',
+                 'failed to connect', 'could not connect', 'network is unreachable',
+                 'remote end hung up', 'early eof', 'http 408', 'http 429',
+                 'http 500', 'http 502', 'http 503', 'http 504')
+    last = ''
+    for attempt in range(1, 4):
+      r = run('-c', f'http.extraheader={hdr}', '-c', 'http.version=HTTP/1.1',
+              'push', 'origin', 'HEAD', check=False)
+      out = (r.stdout + r.stderr).replace(hdr, '<auth>').strip()
+      if r.returncode == 0:
+        print('[OK] push 成功')
+        if out:
+          print('  ' + out.splitlines()[-1])
+        return 0
+      last = out[:400]
+      if not any(p in out.lower() for p in TRANSIENT):
+        print('[FAIL:执行失败] 非临时性失败，不重试（认证 / 非快进 / refspec 问题）')
+        print('  ' + last)
+        return 1
+      print(f'[WARN] 第 {attempt} 次推送失败（临时性），退避 {2 ** attempt}s')
+      time.sleep(2 ** attempt)
+    print('[FAIL:执行失败] 连续三次都是临时性失败，放弃')
+    print('  ' + last)
+    return 1
+
+  except RuntimeError as exc:
+    print(f'[FAIL:执行失败] {exc}')
+    return 1
+
+
 def cmd_journal(a: argparse.Namespace) -> int:
   """看最近的动作记录，并标出「有 start 没 done」的未完成项。"""
   if not JOURNAL.exists():
@@ -772,6 +905,16 @@ def build_parser() -> argparse.ArgumentParser:
   st.add_argument('--dry', action='store_true', help='只打印不拷贝')
   st.add_argument('--skip-scan', dest='skip_scan', action='store_true', help='跳过安全扫描')
   st.set_defaults(func=cmd_stage)
+
+  cm = sub.add_parser('commit', help='提交 + 推送（中文安全 / token 不进 config / 只重试临时性失败 / 回读校验）')
+  cm.add_argument('-m', '--message', help='提交说明；多行用 --msg-file 更稳')
+  cm.add_argument('--msg-file', dest='msg_file', help='从 UTF-8 文件读提交说明')
+  cm.add_argument('--repo', help='仓库目录，默认 repos/dafeiyu-lab')
+  cm.add_argument('--files', nargs='*', help='只暂存这些路径')
+  cm.add_argument('--all', action='store_true', help='暂存全部改动（含未跟踪的新文件）')
+  cm.add_argument('--no-push', dest='no_push', action='store_true', help='只提交不推送')
+  cm.add_argument('--dry', action='store_true', help='只打印要做什么，不动仓库')
+  cm.set_defaults(func=cmd_commit)
 
   jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
   jr.add_argument('--limit', type=int, default=20, help='显示最近 N 条，默认 20；0 = 全部')
