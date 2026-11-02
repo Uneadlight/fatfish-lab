@@ -115,6 +115,32 @@ node dispatch.js reopen <id>
 `list` / `peek` 里带 `!` 前缀的就是在等人的单。
 
 
+## 交接简报：`dispatch.js handoff <id>`
+
+```powershell
+node D:\work\任务分派\dispatch.js handoff T20261028-123050 --repo D:\work\repos\dafeiyu-lab
+```
+
+**设计原则：不让模型回忆。** 简报里每个字段都从事实源读：
+
+| 简报里的字段 | 事实源 | 为什么 |
+|---|---|---|
+| 目标 / 规格 | `box.log.jsonl` 的事件（原文，不改写） | 模型重述会失真 |
+| 事件时间线 | 事件流 | 时间是真的 |
+| 改过哪些文件 | `git status` + `git log --stat` | **问我我只会说个大概** |
+| 跑过什么 | `tools/lab/journal.jsonl` | 同上 |
+| 提交号真伪 | `git cat-file -e` 逐个验 | 自检，不是自我声明 |
+
+退出码：自检发现查不到的提交号时返回 1。
+
+**已知局限（写进输出了，不藏着）**：git 提交和 lab journal 都不记任务 id，所以第 3、4 节是按**时间窗口**取的近似，
+不是精确归属到这条任务。要精确，得让 `lab log` / `lab stage` 记 `--task <id>`——还没做。
+
+**设计来源**：`deepseek-ai` 生态里的 `dsh-auto-handoff`（9,076 行）。
+它的四条机制（软停止 / 人类提示守卫 / 三件事分开 / 注入事实）见
+`D:\work\架构文档\从-auto-handoff-吸收什么.md`。**抄的是「读事实不读回忆」这一条，没装插件。**
+
+
 ## 派单后必须做的提醒
 
 开单成功后，我在聊天里必须明确说：

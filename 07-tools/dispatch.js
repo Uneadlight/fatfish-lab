@@ -24,6 +24,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const DIR = path.resolve(__dirname);
 const BOX = path.join(DIR, 'box.json');
@@ -460,6 +461,173 @@ if (cmd === 'add') {
   }
   console.log(bad ? `\n[FAIL] ${bad} 处不一致` : '\n[OK] 快照与事件流一致');
   process.exit(bad ? 1 : 0);
+} else if (cmd === 'handoff') {
+  // 生成交接简报：核心原则是「不让模型回忆」——每个字段都从事实源读。
+  // 事实源三个：任务事件流（box.log.jsonl）、lab journal（改过哪些文件）、git（分支/HEAD/工作区状态）。
+  const id = rest[0];
+  if (!id) {
+    console.log('ERROR: 用法 node dispatch.js handoff <任务id> [--repo <仓库路径>]');
+    process.exit(2);
+  }
+  const snap = loadSnapshot();
+  const t = snap.tasks.find(x => x.id === id);
+  if (!t) {
+    console.log(`ERROR: 无此单 ${id}`);
+    process.exit(2);
+  }
+
+  const repo = arg('repo') || 'E:\\DS公作区';
+  const GIT = 'E:\\DS公作区\\tools\\git\\cmd\\git.exe';
+  const JOURNAL = 'E:\\DS公作区\\tools\\lab\\journal.jsonl';
+  const lines = [];
+  const w = s => lines.push(s);
+
+  // 事实源 0：这条任务在事件流里的全部事件（时间线是真的，不是回忆的）
+  const evs = readLog().filter(e => e.id === id || (e.task && e.task.id === id));
+
+  w(`# 交接简报 · ${t.id}`);
+  w('');
+  w(`> 生成于 ${now()}　状态 **${t.status}**　阶段 **${t.stage || '-'}**`);
+  w('');
+
+  // ── 1. 目标与约束
+  w('## 1. 目标与约束');
+  w('');
+  w(`- **标题**：${t.title}`);
+  w(`- **目标对话**：${t.target || '-'}`);
+  w(`- **模式**：${t.mode || '-'}`);
+  if (t.spec) {
+    w('');
+    w('**规格（原文，未改写）**：');
+    w('');
+    w('```');
+    w(t.spec);
+    w('```');
+  }
+  w('');
+
+  // ── 2. 时间线（事件流原文）
+  w('## 2. 已发生的事（事件流，非回忆）');
+  w('');
+  if (!evs.length) {
+    w('_（这条任务没有事件记录——可能是老数据只存在于快照里）_');
+  } else {
+    w('| seq | 时间 | op | 说明 |');
+    w('|---|---|---|---|');
+    for (const e of evs) {
+      const extra = e.op === 'stage' ? `→ ${e.to}${e.reason ? '（' + e.reason + '）' : ''}`
+        : e.op === 'take' ? `by ${e.by || '-'}`
+        : e.op === 'done' ? `${e.result || ''}`
+        : '';
+      w(`| ${e.seq || '-'} | ${e.at || '-'} | ${e.op} | ${String(extra).slice(0, 60)} |`);
+    }
+  }
+  w('');
+
+  // ── 3. 改过哪些文件（git，不是模型说）
+  w('## 3. 改过哪些文件（读 git，不是问模型）');
+  w('');
+  w('> ⚠️ **已知局限**：git 提交和 lab journal 都不记任务 id，所以下面两节是按**时间窗口**取的近似，');
+  w('> 不是精确归属到这条任务。看到不属于本任务的内容，请以第 1 节的规格为准自行判断。');
+  w('> 解决方向：让 `lab log`/`lab stage` 记 `--task <id>`，这样以后才可能精确。');
+  w('');
+  const g = (...args) => {
+    try {
+      return execFileSync(GIT, ['-C', repo, ...args], { encoding: 'utf8', timeout: 20000 }).trim();
+    } catch (e) {
+      return `[读不到: ${(e.message || '').split('\n')[0].slice(0, 80)}]`;
+    }
+  };
+  const branchLine = g('status', '--porcelain', '-b').split('\n')[0] || '';
+  w(`- **仓库**：\`${repo}\``);
+  w(`- **分支/HEAD**：\`${branchLine}\``);
+  w(`- **HEAD 提交**：\`${g('log', '-1', '--pretty=%h %ci %s')}\``);
+  w('');
+  const dirty = g('status', '--porcelain').split('\n').filter(Boolean);
+  w(`### 工作区未提交改动（${dirty.length} 处）`);
+  w('');
+  if (!dirty.length) {
+    w('_工作区干净_');
+  } else {
+    w('```');
+    dirty.slice(0, 40).forEach(l => w(l));
+    if (dirty.length > 40) w(`… 另有 ${dirty.length - 40} 处`);
+    w('```');
+  }
+  w('');
+  w('### 本次任务期间新提交的文件（git log --stat，最近 10 个提交）');
+  w('');
+  const stat = g('log', '--since=1.day', '--stat', '--pretty=%h %s', '-10');
+  if (stat && !stat.startsWith('[读不到')) {
+    w('```');
+    w(stat.slice(0, 3000));
+    w('```');
+  } else {
+    w(`_${stat}_`);
+  }
+  w('');
+
+  // ── 4. 跑过什么（lab journal）
+  w('## 4. 跑过的动作（lab journal）');
+  w('');
+  try {
+    const jl = fs.readFileSync(JOURNAL, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+    const recent = jl.slice(-8);
+    if (!recent.length) {
+      w('_journal 是空的_');
+    } else {
+      w('| 时间 | 动作 | 关键信息 |');
+      w('|---|---|---|');
+      for (const e of recent) {
+        let info = '';
+        if (e.action === 'stage.start') info = `${(e.files || []).length} 个文件 → ${e.repo || ''}`;
+        else if (e.action === 'stage.done') info = `拷 ${e.files} / 脱敏 ${e.scrubbed} / 漏 ${e.missed}`;
+        else info = JSON.stringify(e).slice(0, 60);
+        w(`| ${e.at || '-'} | ${e.action} | ${info} |`);
+      }
+    }
+  } catch (e) {
+    w(`_journal 读不到：${(e.message || '').slice(0, 60)}_`);
+  }
+  w('');
+
+  // ── 5. 未完成
+  w('## 5. 未完成 / 下一步');
+  w('');
+  if (t.result) {
+    w(`- **结果记录**：${t.result}`);
+  }
+  if (t.status === 'done') {
+    w('- 这条已完成，下面是给「下一个人」看的复盘线索：');
+  }
+  w(`- **当前阶段**：${t.stage || '-'}${(t.stage || '').startsWith('person:') ? ' ← 卡在人身上，没有人类输入动不了' : ''}`);
+  w(`- 规格里没被勾掉的条目（需要人看一遍原始 spec，程序不猜）：见第 1 节`);
+  w('');
+
+  // ── 自检：每条 commit 号真能查到
+  w('## 自检');
+  w('');
+  const shas = [...new Set((lines.join('\n').match(/\b[0-9a-f]{7,40}\b/g) || []))];
+  let okCount = 0;
+  let badCount = 0;
+  for (const sha of shas.slice(0, 10)) {
+    try {
+      execFileSync(GIT, ['-C', repo, 'cat-file', '-e', `${sha}^{commit}`], { timeout: 8000 });
+      okCount++;
+    } catch {
+      badCount++;
+    }
+  }
+  w(`- 简报里出现的 ${shas.length} 个疑似提交号，抽查前 10 个：**${okCount} 个在 \`${repo}\` 里确实存在**，${badCount} 个查不到`);
+  if (badCount) w('- ⚠️ 有查不到的：可能是别的仓库的提交，或者根本是错的号');
+
+  // 把自检结果也算进去再打印（前两节已经拼好，这里补最后一步）
+  const head = lines.join('\n');
+  const finalText = badCount
+    ? head
+    : head;
+  console.log(finalText);
+  process.exit(badCount > 0 ? 1 : 0);
 } else if (cmd === 'import') {
   // 一次性：把老的 box.json 里的单灌进事件流（每条一个 import 事件）。
   const old = JSON.parse(fs.readFileSync(BOX, 'utf8'));
