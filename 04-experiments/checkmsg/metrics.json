@@ -1,0 +1,29 @@
+{
+  "note": "永远猜 SUSPECT 的基线是 0.50，所以 0.60 的有效能力只有 10 个百分点",
+  "rounds": [
+    {
+      "round": "v1 简洁判据",
+      "total": "12/20",
+      "accuracy": 0.6,
+      "honest_recall": "2/10",
+      "mismatch_recall": "10/10",
+      "balanced_accuracy": 0.6
+    },
+    {
+      "round": "v2 加基础率+强制拆断言",
+      "total": "2/20",
+      "accuracy": 0.1,
+      "honest_recall": "0/10",
+      "mismatch_recall": "2/10",
+      "balanced_accuracy": 0.1
+    },
+    {
+      "round": "v3 修好参数",
+      "total": "12/20",
+      "accuracy": 0.6,
+      "honest_recall": "2/10",
+      "mismatch_recall": "10/10",
+      "balanced_accuracy": 0.6
+    }
+  ]
+}
