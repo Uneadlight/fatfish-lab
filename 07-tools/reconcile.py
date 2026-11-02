@@ -244,8 +244,13 @@ def main() -> int:
   sha_total = 0
   for e in entries:
     blob = e['text'] + ' ' + e['title']
-    strong = set(SHA_STRONG_RE.findall(blob))
-    weak = set(SHA_RE.findall(blob)) - strong - set(SAFE_TOKEN_RE.findall(blob))
+    # 同一行里出现 token 的，整行不算提交号。
+    # 起因：决策日志里写了一句「把 safe_mutate 的审核 token 当提交号。8e99d8c1… 是 16 位 hex」，
+    # 这句本身就是"解释这个坑"的，结果被自己的工具抓成了新差异。
+    # 宁可漏报一行，不要天天喊狼来了。
+    clean_blob = '\n'.join(ln for ln in blob.splitlines() if 'token' not in ln.lower())
+    strong = set(SHA_STRONG_RE.findall(clean_blob))
+    weak = set(SHA_RE.findall(clean_blob)) - strong - set(SAFE_TOKEN_RE.findall(clean_blob))
 
     for sha in sorted(strong | weak):
       is_strong = sha in strong
@@ -302,22 +307,16 @@ def main() -> int:
       continue
     if day not in spend_by_day:
       if ledger_first and day < ledger_first:
-        diffs.append({
-          'kind': 'C',
-          'where': day,
-          'what': f'当天写了 {len(es)} 段日志',
-          'fact': f'账本没有这一天（账本最早的一条是 {ledger_first}）',
-          'ask': '账本是 11-01 才开始采集的，这天之前没有数据不算矛盾——'
-                 '除非你想知道那几天到底花了多少（平台后台能查）',
-        })
-      else:
-        diffs.append({
-          'kind': 'C',
-          'where': day,
-          'what': f'当天写了 {len(es)} 段日志',
-          'fact': '账本在账本的覆盖区间内却没有这一天的记录（采集器可能那天没跑）',
-          'ask': '是采集器漏跑了，还是这天真的没有余额变化？',
-        })
+        # 账本覆盖范围之前的日期不报差异：这是已知的数据缺口（账本 2026-11-01 才有），
+        # 每次跑都报 4 条同样的噪音，会把真正的差异淹掉。
+        continue
+      diffs.append({
+        'kind': 'C',
+        'where': day,
+        'what': f'当天写了 {len(es)} 段日志',
+        'fact': '账本在覆盖区间内，却没有这一天的记录（采集器可能那天没跑）',
+        'ask': '是采集器漏跑了，还是这天真的没有余额变化？',
+      })
       continue
     spent = spend_by_day[day]
     if spent < 0.05:
