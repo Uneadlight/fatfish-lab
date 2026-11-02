@@ -1047,6 +1047,36 @@ def cmd_correction(a: argparse.Namespace) -> int:
   return _fail(1, f'未知动作：{a.action}')
 
 
+# ---------------------------------------------------------------- config
+
+# 起因：社区插件 dsh-config-manager（65,391 行）专门做「备份/恢复/迁移 DSH 配置」，
+# 而我一直在手工 Copy-Item。不装它（1,686 文件 / 25 MB / 要重启），吸收三条思路自己做：
+#   ① 白名单式备份  ② secrets 永不进备份但记下排除了哪几个  ③ 每次生成 manifest（sha256）
+
+CONFIG_BACKUP = Path(__file__).with_name('config_backup.py')
+
+
+def cmd_config(a: argparse.Namespace) -> int:
+  """转调 config_backup.py（DSH 配置备份，不含 secrets）。"""
+  if not CONFIG_BACKUP.exists():
+    return _fail(2, f'找不到 config_backup.py：{CONFIG_BACKUP}')
+  argv = [sys.executable, str(CONFIG_BACKUP)]
+  if a.action == 'list':
+    argv.append('--list')
+  elif a.action == 'dry' or a.dry:
+    argv.append('--dry')
+  elif a.action == 'verify':
+    # 验证最近一份
+    root = ROOT / '备份'
+    dirs = sorted(root.glob('config-*'), reverse=True)
+    if not dirs:
+      return _fail(2, '还没有任何 config 备份')
+    return subprocess.call([
+      sys.executable, str(Path(__file__).with_name('_verify_backup.py')), str(dirs[0])
+    ])
+  return subprocess.call(argv)
+
+
 # ---------------------------------------------------------------- ocr
 
 
@@ -1201,6 +1231,12 @@ def build_parser() -> argparse.ArgumentParser:
   cr.add_argument('--tags', nargs='*', help='标签，如 编码 乱码 并发')
   cr.add_argument('--limit', type=int, default=5, help='list 显示最近几条，默认 5')
   cr.set_defaults(func=cmd_correction)
+
+  cf = sub.add_parser('config', help='DSH 配置备份（白名单 / 不含 secrets / 带 manifest）')
+  cf.add_argument('action', nargs='?', default='backup', choices=['backup', 'list', 'dry', 'verify'],
+                  help='backup 备份（默认）/ list 看已有 / dry 只看会备份什么 / verify 验最近一份')
+  cf.add_argument('--dry', action='store_true', help='等价于 action=dry')
+  cf.set_defaults(func=cmd_config)
 
   return parser
 
