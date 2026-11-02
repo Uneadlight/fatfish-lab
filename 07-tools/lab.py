@@ -633,7 +633,10 @@ def cmd_commit(a: argparse.Namespace) -> int:
                  'remote end hung up', 'early eof', 'http 408', 'http 429',
                  'http 500', 'http 502', 'http 503', 'http 504')
     last = ''
-    for attempt in range(1, 4):
+    # 第一次真用就发现 2/4/8 秒不够：网络抖动恢复常要半分钟（实测三次共 14 秒
+    # 全挂，隔一分钟再手动推就成功了）。所以退到 2/5/10/20，总共约 37 秒。
+    backoff = (2, 5, 10, 20)
+    for attempt, wait in enumerate(backoff, 1):
       r = run('-c', f'http.extraheader={hdr}', '-c', 'http.version=HTTP/1.1',
               'push', 'origin', 'HEAD', check=False)
       out = (r.stdout + r.stderr).replace(hdr, '<auth>').strip()
@@ -647,10 +650,11 @@ def cmd_commit(a: argparse.Namespace) -> int:
         print('[FAIL:执行失败] 非临时性失败，不重试（认证 / 非快进 / refspec 问题）')
         print('  ' + last)
         return 1
-      print(f'[WARN] 第 {attempt} 次推送失败（临时性），退避 {2 ** attempt}s')
-      time.sleep(2 ** attempt)
-    print('[FAIL:执行失败] 连续三次都是临时性失败，放弃')
+      print(f'[WARN] 第 {attempt} 次推送失败（临时性），退避 {wait}s')
+      time.sleep(wait)
+    print('[FAIL:执行失败] 连续四次都是临时性失败，放弃')
     print('  ' + last)
+    print('  你可能要做什么：过一两分钟再跑一次；如果是长期连不上，检查网络或代理')
     return 1
 
   except RuntimeError as exc:
