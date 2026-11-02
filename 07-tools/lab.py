@@ -38,6 +38,9 @@ DEFAULT_PLAN = ROOT / 'tools' / 'lab' / 'release-plan.txt'
 REQUIRED_SECTIONS = ('**做了什么**', '**为什么**', '**取舍**', '**教训**')
 
 JOURNAL = ROOT / 'tools' / 'lab' / 'journal.jsonl'
+# 纠正日志：用户纠正我时，记下「原话 / 我原来的想法 / 改成了什么」。
+# 记忆库存结论（对的是什么），这里存过程（我原来错在哪）——后者才是能复盘的东西。
+CORRECTIONS = ROOT / '自进化' / 'corrections.jsonl'
 
 
 def journal(action: str, **fields) -> None:
@@ -972,6 +975,78 @@ def cmd_observe(a: argparse.Namespace) -> int:
   return _fail(1, f'未知动作: {action}')
 
 
+# ---------------------------------------------------------------- correction
+
+# 起因：吸收社区插件 `dsh-run2skill` 的核心思路——「把对话里的纠正变成可复用的东西」。
+# 我的记忆库存的是结论（对的是什么），缺的正是「我原来错在哪」。
+# 没有"原来的想法"，纠正就退化成一条新规矩，看不出自己犯的是哪一类毛病。
+
+
+def cmd_correction(a: argparse.Namespace) -> int:
+  """纠正日志：用户纠正我时，记下原话 / 我原来的想法 / 改成了什么。"""
+  if a.action == 'add':
+    if not a.said:
+      return _fail(1, '--said 必填（用户当时说了什么）')
+    rec = {
+      'ts': time.strftime('%Y-%m-%d %H:%M:%S'),
+      'date': time.strftime('%Y-%m-%d'),
+      'said': a.said.strip(),
+      'was': (a.was or '').strip(),
+      'now': (a.now or '').strip(),
+      'tags': a.tags or [],
+    }
+    CORRECTIONS.parent.mkdir(parents=True, exist_ok=True)
+    with CORRECTIONS.open('a', encoding='utf-8', newline='\n') as fh:
+      fh.write(json.dumps(rec, ensure_ascii=False) + '\n')
+      fh.flush()
+      import os as _os
+
+      _os.fsync(fh.fileno())
+    # 写后回读，确认真的能解析（"写了"≠"写对了"）
+    try:
+      last = CORRECTIONS.read_text(encoding='utf-8').strip().splitlines()[-1]
+      json.loads(last)
+    except Exception as exc:  # noqa: BLE001
+      return _fail(2, f'追加后回读失败：{exc}')
+    print(f'[OK] 已记一条纠正 -> {CORRECTIONS}')
+    print(f'     原话：{rec["said"][:60]}')
+    if rec['was']:
+      print(f'     原来：{rec["was"][:60]}')
+    if rec['now']:
+      print(f'     改成：{rec["now"][:60]}')
+    return 0
+
+  if not CORRECTIONS.exists():
+    print('（还没有纠正记录）')
+    return 0
+  rows = [json.loads(x) for x in CORRECTIONS.read_text(encoding='utf-8').splitlines() if x.strip()]
+
+  if a.action == 'list':
+    tail = rows[-a.limit:]
+    print(f'共 {len(rows)} 条，最近 {len(tail)} 条：\n')
+    for r in tail:
+      tags = ' '.join(f'#{t}' for t in r.get('tags') or [])
+      print(f'{r["ts"]}  {tags}')
+      print(f'  原话：{r["said"][:80]}')
+      if r.get('was'):
+        print(f'  原来：{r["was"][:70]}')
+      if r.get('now'):
+        print(f'  改成：{r["now"][:70]}')
+      print()
+    return 0
+
+  if a.action == 'stats':
+    from collections import Counter
+
+    c = Counter(t for r in rows for t in (r.get('tags') or ['(无标签)']))
+    print(f'共 {len(rows)} 条纠正，按标签：\n')
+    for k, n in c.most_common():
+      print(f'  {k:16} {n:3}')
+    return 0
+
+  return _fail(1, f'未知动作：{a.action}')
+
+
 # ---------------------------------------------------------------- ocr
 
 
@@ -1117,6 +1192,15 @@ def build_parser() -> argparse.ArgumentParser:
   oc.add_argument('--min-score', dest='min_score', type=float, default=0.3, help='置信度下限，默认 0.3')
   oc.add_argument('--timeout', type=int, default=180, help='超时秒数，默认 180')
   oc.set_defaults(func=cmd_ocr)
+
+  cr = sub.add_parser('correction', help='纠正日志：记下用户原话 / 我原来的想法 / 改成了什么')
+  cr.add_argument('action', choices=['add', 'list', 'stats'], help='add 记一条 / list 看最近 / stats 按标签统计')
+  cr.add_argument('--said', help='用户当时的原话（add 用）')
+  cr.add_argument('--was', help='我原来的想法（add 用）')
+  cr.add_argument('--now', help='改成什么了（add 用）')
+  cr.add_argument('--tags', nargs='*', help='标签，如 编码 乱码 并发')
+  cr.add_argument('--limit', type=int, default=5, help='list 显示最近几条，默认 5')
+  cr.set_defaults(func=cmd_correction)
 
   return parser
 
