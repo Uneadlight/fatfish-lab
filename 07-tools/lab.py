@@ -607,6 +607,21 @@ def cmd_commit(a: argparse.Namespace) -> int:
     # 「暂存区为空就收工」是 ghctl 那次踩过的坑：commit 成功、push 失败后再跑，
     # 什么都不做，用户以为推上去了其实没有。所以这里要再问一句有没有别的活。
     if not staged:
+      # 第二个同类坑（2026-11-02 复发）：默认只 `git add -u`（已跟踪文件），
+      # 新写的文件会被 git 当成未跟踪，于是"暂存区为空"→ 报"无事可做"，
+      # 用户以为提交了、远端其实没有。这里必须把未跟踪文件也数出来并说清楚。
+      untracked = [
+        ln[3:] for ln in run('status', '--porcelain').stdout.splitlines()
+        if ln.startswith('?? ')
+      ]
+      if untracked:
+        print(f'[FAIL:用途错误] 暂存区为空，但有 {len(untracked)} 个未跟踪文件没提交：')
+        for u in untracked[:8]:
+          print(f'    {u}')
+        if len(untracked) > 8:
+          print(f'    …还有 {len(untracked) - 8} 个')
+        print('  → 默认只提交已跟踪文件的改动；要带上它们用 `--all` 或 `--files <路径…>`')
+        return 2
       if unpushed == 0:
         print('[OK] 没有改动、也没有未推送的提交，无事可做')
         return 0
