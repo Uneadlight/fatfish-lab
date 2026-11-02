@@ -22,6 +22,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -954,6 +955,67 @@ def cmd_observe(a: argparse.Namespace) -> int:
   return _fail(1, f'未知动作: {action}')
 
 
+# ---------------------------------------------------------------- ocr
+
+
+OCR_PY = ROOT / 'tools' / 'ocr-venv312' / 'Scripts' / 'python.exe'
+OCR_RUN = ROOT / 'tools' / 'lab' / 'ocr_run.py'
+
+
+def cmd_ocr(a: argparse.Namespace) -> int:
+  """图片转文字。转发给 ocr-venv312，因为 rapidocr 只装在那儿。"""
+  if not OCR_PY.exists():
+    return _fail(2, f'找不到 OCR 解释器：{OCR_PY}（重新建 venv 并装 rapidocr_onnxruntime）')
+  if not OCR_RUN.exists():
+    return _fail(2, f'找不到 ocr_run.py：{OCR_RUN}')
+
+  from pathlib import Path as _P
+
+  img = _P(a.image)
+  if not img.exists():
+    return _fail(2, f'图片不存在：{img}')
+
+  cmd = [str(OCR_PY), str(OCR_RUN), str(img), '--min-score', str(a.min_score)]
+  try:
+    proc = subprocess.run(cmd, capture_output=True, timeout=a.timeout, check=False)  # noqa: S603
+  except subprocess.TimeoutExpired:
+    return _fail(3, f'OCR 超时（{a.timeout}s）：{img}')
+
+  out = proc.stdout.decode('utf-8', errors='replace').strip()
+  if not out:
+    err = proc.stderr.decode('utf-8', errors='replace').strip()[-400:]
+    return _fail(4, f'OCR 没有输出（exit={proc.returncode}）{chr(10)}{err}')
+
+  try:
+    data = json.loads(out)
+  except json.JSONDecodeError:
+    return _fail(4, f'OCR 输出不是 JSON：{out[:200]}')
+
+  if not data.get('ok'):
+    return _fail(4, f'OCR 失败：{data.get("error")}')
+
+  lines = data.get('lines', [])
+  if a.json:
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+    return 0
+
+  if not lines:
+    print(f'[OK] {img.name}：没有识别到文字（{data.get("elapsed")}s）')
+    return 0
+
+  if a.layout:
+    for ln in lines:
+      x = int(min(p[0] for p in ln['box']))
+      y = int(min(p[1] for p in ln['box']))
+      print(f'({x:4d},{y:4d}) {ln["score"]:.2f}  {ln["text"]}')
+  else:
+    for ln in lines:
+      print(ln['text'])
+
+  print(f'[OK] {len(lines)} 行，{data.get("elapsed")}s', file=sys.stderr)
+  return 0
+
+
 # ---------------------------------------------------------------- cli
 
 
@@ -1030,6 +1092,14 @@ def build_parser() -> argparse.ArgumentParser:
   iss.add_argument('--close', action='store_true', help='评论之后（或单独）关闭')
   iss.add_argument('--repo', help='owner/name')
   iss.set_defaults(func=cmd_issue)
+
+  oc = sub.add_parser('ocr', help='图片转文字（RapidOCR，本地离线，跑在 ocr-venv312 里）')
+  oc.add_argument('image', help='图片路径（png/jpg/webp/bmp/tiff）')
+  oc.add_argument('--json', action='store_true', help='输出完整 JSON（含每行坐标与置信度）')
+  oc.add_argument('--layout', action='store_true', help='按坐标输出，保留版面位置')
+  oc.add_argument('--min-score', dest='min_score', type=float, default=0.3, help='置信度下限，默认 0.3')
+  oc.add_argument('--timeout', type=int, default=180, help='超时秒数，默认 180')
+  oc.set_defaults(func=cmd_ocr)
 
   return parser
 

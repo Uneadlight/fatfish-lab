@@ -206,6 +206,30 @@ lab reconcile --md report.md     # 另存
 
 宁可漏报一行，也不能天天喊狼来了。
 
+### `lab ocr` —— 图片转文字（本地离线，0 元）
+
+```bash
+lab ocr 截图.png                  # 纯文本，一行一条
+lab ocr 截图.png --layout         # 带坐标和置信度，保留版面位置
+lab ocr 截图.png --json           # 完整 JSON（给脚本消费）
+lab ocr 截图.png --min-score 0.5  # 过滤低置信度的行
+```
+
+**为什么是「转发」而不是「直接 import」**：`rapidocr_onnxruntime` 只装在 `D:\work\tools\ocr-venv312`（Python 3.12），而 `lab.py` 跑在 DSH 的 runtime python 里。所以 `lab ocr` 是把任务转给 `ocr_run.py`，由它在那个 venv 里跑——**换机器时两个路径都要带走**。
+
+**实测**（640×240 的中英混排图，三行）：置信度 0.96 / 1.00 / 0.99，**耗时 0.62 秒**，本地 CPU，不花钱、不联网。
+
+**和 `vision_describe` 的分工**：
+
+| | `lab ocr` | `vision_describe` |
+|---|---|---|
+| 干什么 | **只认字**，给出文字和坐标 | 描述画面内容、回答关于图片的问题 |
+| 跑在哪 | 本地 CPU（RapidOCR） | 智谱 GLM-4V（云端，有缓存）或本地 Ollama |
+| 花钱 | **0** | 云端按次，本地 0 |
+| 什么时候用 | 截图转文字、表格转文本、批量提取 | 看不懂图里是什么、要理解场景 |
+
+**先试 ocr**：如果只是"把图里的字抠出来"，本地 0.6 秒就够，不必花云端的钱。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF
