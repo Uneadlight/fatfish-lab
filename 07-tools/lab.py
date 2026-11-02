@@ -419,13 +419,39 @@ def _gh(method: str, path: str, payload=None) -> tuple[int, dict]:
 
 
 def _slug(a: argparse.Namespace) -> str:
-  slug = getattr(a, 'repo', None)
-  if slug:
-    return slug
-  cfg = ROOT / 'tools' / 'gh-login' / 'ghctl-default.txt'
-  if cfg.exists():
-    return cfg.read_text(encoding='utf-8').strip()
-  return 'Uneadlight/fatfish-lab'
+  """把 --repo 归一成 owner/repo。
+
+  2026-11-02 修：原来直接把 --repo 原样塞进 URL，传本地路径（含中文）时
+  urllib 抛 `UnicodeEncodeError: 'ascii' codec can't encode characters in
+  position 16-18`——报错跟真实原因（参数形态错了）完全对不上。现在两种形态都收：
+  ① `owner/repo` 直接用；② 本地仓库路径 → 问 git remote 要。
+  """
+  raw = (getattr(a, 'repo', None) or '').strip()
+  if not raw:
+    cfg = ROOT / 'tools' / 'gh-login' / 'ghctl-default.txt'
+    if cfg.exists():
+      return cfg.read_text(encoding='utf-8').strip()
+    return 'Uneadlight/fatfish-lab'
+
+  if re.fullmatch(r'[\w.-]+/[\w.-]+', raw):
+    return raw
+
+  path = Path(raw).expanduser()
+  if path.is_dir() and (path / '.git').exists():
+    import subprocess
+
+    git = ROOT / 'tools' / 'git' / 'cmd' / 'git.exe'
+    if git.exists():
+      r = subprocess.run((str(git), '-C', str(path), 'remote', 'get-url', 'origin'),
+                         capture_output=True, text=True, encoding='utf-8')
+      m = re.search(r'github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$', (r.stdout or '').strip())
+      if m:
+        return m.group(1)
+
+  raise SystemExit(
+    '[FAIL:用途错误] --repo 要 owner/repo（如 Uneadlight/fatfish-lab），'
+    f'或者一个带 origin remote 的本地仓库路径；收到：{raw}'
+  )
 
 
 def cmd_ci(a: argparse.Namespace) -> int:
