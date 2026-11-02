@@ -688,6 +688,32 @@ def cmd_commit(a: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_reconcile(a: argparse.Namespace) -> int:
+  """记录对账：把决策日志、账本、git log 摆在一起，只报「需要一句解释」的地方。
+
+  实现在同目录的 reconcile.py——它要单独跑（`py tools/lab/reconcile.py`），
+  这里只做转调，好处是 `lab --help` 里能看见它，不用另外记一条路径。
+  """
+  script = Path(__file__).with_name('reconcile.py')
+  if not script.exists():
+    print(f'[FAIL:能力缺失] 找不到 {script}')
+    return 2
+
+  argv = [sys.executable, str(script)]
+  if getattr(a, 'log', ''):
+    argv += ['--log', a.log]
+  if getattr(a, 'days', 0):
+    argv += ['--days', str(a.days)]
+  if getattr(a, 'md', ''):
+    argv += ['--md', a.md]
+  if getattr(a, 'selftest', False):
+    argv.append('--selftest')
+
+  import subprocess
+
+  return subprocess.call(argv)
+
+
 def cmd_journal(a: argparse.Namespace) -> int:
   """看最近的动作记录，并标出「有 start 没 done」的未完成项。"""
   if not JOURNAL.exists():
@@ -949,6 +975,13 @@ def build_parser() -> argparse.ArgumentParser:
   jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
   jr.add_argument('--limit', type=int, default=20, help='显示最近 N 条，默认 20；0 = 全部')
   jr.set_defaults(func=cmd_journal)
+
+  rc = sub.add_parser('reconcile', help='记录对账：日志 / 账本 / git 摆在一起，只报差异不判错')
+  rc.add_argument('--log', default='', help='换一份日志来对')
+  rc.add_argument('--days', type=int, default=0, help='只看最近 N 天')
+  rc.add_argument('--md', default='', help='另存为 markdown')
+  rc.add_argument('--selftest', action='store_true', help='先证明检查抓得到，再相信它报的 OK')
+  rc.set_defaults(func=cmd_reconcile)
 
   ob = sub.add_parser('observe', help='观察档：只记录「我会做什么」，不做；攒够认可才升 auto')
   ob.add_argument('action', choices=['list', 'add', 'ack', 'promote', 'demote', 'stamp'])
