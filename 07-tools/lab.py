@@ -602,6 +602,16 @@ def cmd_commit(a: argparse.Namespace) -> int:
       run('add', '-u')
     staged = [x for x in run('diff', '--cached', '--name-only').stdout.splitlines() if x.strip()]
 
+    # 未跟踪文件也要数出来——**不管暂存区空不空**。
+    # 2026-11-02 真事故：`lab stage` 拷了 20 个文件、`lab commit` 只提交了 2 个，
+    # 因为默认 `git add -u` 不含新文件，而当时"暂存区不为空"所以跳过了检查，
+    # 结果是 lab.py（引用了 ocr_run.py）推上去了、ocr_run.py 没推——远端断。
+    # 判据：暂存区有东西不代表没漏东西。
+    untracked = [
+      ln[3:] for ln in run('status', '--porcelain').stdout.splitlines()
+      if ln.startswith('?? ')
+    ]
+
     ahead = run('rev-list', '--count', '@{u}..HEAD', check=False)
     unpushed = int(ahead.stdout.strip() or 0) if ahead.returncode == 0 else -1
 
@@ -611,10 +621,6 @@ def cmd_commit(a: argparse.Namespace) -> int:
       # 第二个同类坑（2026-11-02 复发）：默认只 `git add -u`（已跟踪文件），
       # 新写的文件会被 git 当成未跟踪，于是"暂存区为空"→ 报"无事可做"，
       # 用户以为提交了、远端其实没有。这里必须把未跟踪文件也数出来并说清楚。
-      untracked = [
-        ln[3:] for ln in run('status', '--porcelain').stdout.splitlines()
-        if ln.startswith('?? ')
-      ]
       if untracked:
         print(f'[FAIL:用途错误] 暂存区为空，但有 {len(untracked)} 个未跟踪文件没提交：')
         for u in untracked[:8]:
@@ -631,6 +637,17 @@ def cmd_commit(a: argparse.Namespace) -> int:
       else:
         print('[WARN] 没有改动，也判断不出有没有未推送（当前分支没有上游）；不猜，退出')
         return 1
+    elif untracked:
+      # 暂存区有东西、但还有未跟踪文件——这是最危险的情形：看着提交成功了，
+      # 实际上少了新写的文件。默认模式下直接拦下，要求显式说明。
+      print(f'[FAIL:用途错误] 已暂存 {len(staged)} 个文件，但还有 {len(untracked)} 个未跟踪文件会漏掉：')
+      for u in untracked[:8]:
+        print(f'    {u}')
+      if len(untracked) > 8:
+        print(f'    …还有 {len(untracked) - 8} 个')
+      print('  → 如果它们该进这次提交，用 `--all`；如果只提交其中几个，用 `--files <路径…>`')
+      print('  → 如果它们本来就不该进（构建产物等），把它们加进 .gitignore')
+      return 2
 
     if a.dry:
       print(f'[DRY] 仓库：{repo}')
