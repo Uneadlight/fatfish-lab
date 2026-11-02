@@ -176,6 +176,22 @@ try:
 except Exception as e:  # noqa: BLE001
     mark("WARN", "Ollama", f"api down: {type(e).__name__}（明天视觉前置条件）")
 
+# ---------- 记录对账（日志 / 账本 / git 三份记录互相对不对得上）----------
+# 大多数时候是 0 差异，那是正常的——它是体检，不是报警器。
+# 但如果不接进这里，它就永远不会被跑，所以「接进流程」比「跑得漂亮」重要。
+RECONCILE = r"D:\work\tools\lab\reconcile.py"
+if os.path.isfile(RECONCILE):
+    rc, out = run([PY, RECONCILE, "--quiet"], timeout=90)
+    m = re.search(r"\*\*(\d+) 处需要一句解释\*\*", out)
+    if rc != 0:
+        mark("WARN", "对账", f"reconcile 跑失败（exit {rc}）：{out.strip().splitlines()[-1][:120] if out.strip() else '无输出'}")
+    elif m and int(m.group(1)) > 0:
+        mark("WARN", "对账", f"{m.group(1)} 处记录对不上 → 跑 `lab reconcile` 看清单（不判错，只问要补哪句）")
+    else:
+        mark("OK", "对账", "日志 / 账本 / git 没有需要解释的差异")
+else:
+    mark("INFO", "对账", f"没有 {RECONCILE}，跳过")
+
 # ---------- 汇总 ----------
 print()
 ok = warn = info = fail = 0
