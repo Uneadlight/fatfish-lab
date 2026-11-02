@@ -147,6 +147,25 @@ lab observe stamp                         # 看当前规则版本
 
 数据落在 `自进化/observe.jsonl` 与 `observe-mode.json`。
 
+### `lab commit` —— 提交并推送（替代 5 个 `_commit_*.py` / `_push.py`）
+
+来源：2026-11-02 那天光"上传到仓库"就手写了 5 个一次性脚本，每个都在重填同样四个坑。
+
+```powershell
+lab commit -m "docs: 补 lab commit 说明" --repo D:\work\repos\dafeiyu-lab
+lab commit --msg-file msg.txt --files a.py b.py --no-push
+lab commit -m "..." --all --dry          # 只看会提交什么
+```
+
+它一次绕开四个坑：
+
+1. **中文 message**——写临时文件 + `git -c i18n.commitEncoding=utf-8 commit -F`，提交后回读 `git log -1 --pretty=%B` 比对首行，对不上就报错（不看终端长相）
+2. **token 不落盘**——走 `http.extraheader`，`.git/config` 里没有凭据
+3. **只对临时性失败重试**——连接重置/超时/HTTP 5xx 才重试，认证失败/非快进立即报错
+4. **暂存区为空不等于做完了**——先问 `git rev-list --count @{u}..HEAD`，有未推送提交就跳过提交直接推送
+
+**退避是 2/5/10/20 秒（约 37 秒），不是 2/4/8。** 这是第一次真用就撞出来的：原配置三次共 14 秒，连挂三次报 `Failed to connect to github.com:443 after 21065 ms`，隔一分钟手动重推就成功了——**「临时性」不等于「几十秒内会好」**，网络抖动恢复常在 30–60 秒量级。改成 37 秒窗口后同样的网络状况下第 3 次（退避 10s）就推成功了。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF
