@@ -1238,7 +1238,35 @@ def build_parser() -> argparse.ArgumentParser:
   cf.add_argument('--dry', action='store_true', help='等价于 action=dry')
   cf.set_defaults(func=cmd_config)
 
+  cl = sub.add_parser('claims', help='完成声明的证据对账：我说的「做完了」，日志/提交/文件能不能接住')
+  cl.add_argument('--date', help='YYYY-MM-DD（默认今天）')
+  cl.add_argument('--file', help='直接查某个 md 文件')
+  cl.add_argument('--all', action='store_true', help='全部日期汇总')
+  cl.add_argument('--json', action='store_true', help='JSON 输出')
+  cl.set_defaults(func=cmd_claims)
+
   return parser
+
+
+def cmd_claims(a: argparse.Namespace) -> int:
+  """完成声明的证据对账（治 #1 形式完成）：我说的「做完了」，日志/提交/文件能不能接住。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'claims.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'date', None):
+    args += ['--date', a.date]
+  if getattr(a, 'file', None):
+    args += ['--file', a.file]
+  if getattr(a, 'all', False):
+    args.append('--all')
+  if getattr(a, 'json', False):
+    args.append('--json')
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
 
 
 def main(argv=None) -> int:

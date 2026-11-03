@@ -192,6 +192,29 @@ if os.path.isfile(RECONCILE):
 else:
     mark("INFO", "对账", f"没有 {RECONCILE}，跳过")
 
+# ---------- 完成声明的证据（治 #1 形式完成）----------
+# 只查「今天」：历史日志的措辞是当时的，不回溯改口。
+# 高比例无证据才是问题；少量无证据可能是描述性段落被误认，先只报 WARN。
+CLAIMS = r"D:\work\tools\lab\claims.py"
+if os.path.isfile(CLAIMS):
+    rc, out = run([PY, CLAIMS, "--json"], timeout=120)
+    try:
+        data = json.loads(out[out.index("{"):]) if "{" in out else {}
+    except Exception:
+        data = {}
+    claims = data.get("claims", 0)
+    unbacked = data.get("unbacked", [])
+    if claims == 0:
+        mark("INFO", "完成声明", "今天还没有决策日志段，跳过（写了之后才会有对账）")
+    elif not unbacked:
+        mark("OK", "完成声明", f"{claims} 条全部有证据接住")
+    else:
+        pct = len(unbacked) / claims * 100
+        first = unbacked[0]["text"][:60]
+        mark("WARN", "完成声明", f"{claims} 条里 {len(unbacked)} 条没证据（{pct:.0f}%）→ 首条：{first}")
+else:
+    mark("INFO", "完成声明", f"没有 {CLAIMS}，跳过")
+
 # ---------- 汇总 ----------
 print()
 ok = warn = info = fail = 0
