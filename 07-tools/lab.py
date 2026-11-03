@@ -669,6 +669,34 @@ def cmd_commit(a: argparse.Namespace) -> int:
       print(f'[DRY] 首行：{text.splitlines()[0]}')
       return 0
 
+    # ── 1.5 提交说明的排版自检（只提示，绝不阻断）────────────────
+    # 为什么只提示不拦：lint 想解决的是「人读不下去」，如果拦下来，
+    # 就会变成「为了过检查而改文档」，那就反了。2026-11-03 用户给的排版五律
+    # （短句成行 / 小标题要短 / 每条一个事实 / 留白 / 能列表就不写段落）
+    # 在这里只挑两种最硬的毛病：首行过长、段落过密。
+    if not getattr(a, 'no_lint', False):
+      lines = text.splitlines()
+      warns: list[str] = []
+      if lines and len(lines[0]) > 72:
+        warns.append(f'首行 {len(lines[0])} 字，超过 72（git log 会被截断）')
+      run_len = 0
+      for ln in lines[1:]:
+        if ln.strip():
+          run_len += 1
+          if run_len == 6:
+            warns.append('有一段连续 6 行以上没留白，读起来会挤')
+            break
+        else:
+          run_len = 0
+      for i, ln in enumerate(lines, 1):
+        if len(ln) > 120:
+          warns.append(f'第 {i} 行 {len(ln)} 字，超过 120')
+      if warns:
+        print('[lint] 提交说明有几处读起来费劲（只提示，不阻断）：')
+        for w in warns:
+          print(f'   · {w}')
+        print('   → 觉得无所谓就继续；下次不想看到加 --no-lint')
+
     # ── 2. 提交（message 走文件：Windows 命令行参数按 GBK 传，中文 -m 会落库变乱码）
     if staged:
       with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='\n',
@@ -1179,6 +1207,7 @@ def build_parser() -> argparse.ArgumentParser:
   cm.add_argument('--files', nargs='*', help='只暂存这些路径')
   cm.add_argument('--all', action='store_true', help='暂存全部改动（含未跟踪的新文件）')
   cm.add_argument('--no-push', dest='no_push', action='store_true', help='只提交不推送')
+  cm.add_argument('--no-lint', dest='no_lint', action='store_true', help='跳过 message 排版检查（默认只提示不阻断）')
   cm.add_argument('--dry', action='store_true', help='只打印要做什么，不动仓库')
   cm.set_defaults(func=cmd_commit)
 
