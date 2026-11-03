@@ -201,6 +201,92 @@ def cmd_stats() -> int:
     return 0
 
 
+def cmd_show(session: str, limit: int = 40, head: bool = False) -> int:
+    """打印某个会话的原文（默认最后 40 条，--head 从头）。"""
+    if index_is_stale():
+        build_index()
+    rows = [r for r in load_index() if r["s"] == session]
+    if not rows:
+        # 允许传完整目录名或前缀
+        rows = [r for r in load_index() if r["s"] == session[:8]]
+    if not rows:
+        print(f"索引里没有会话 {session}。先跑 --list 看有哪些。")
+        return 1
+
+    rows.sort(key=lambda r: r.get("t") or 0)
+    total = len(rows)
+    picked = rows[:limit] if head else rows[-limit:]
+    if not head and total > limit:
+        print(f"（共 {total} 条，只显示最后 {limit} 条；要前面用 --head，要全部用 --limit {total}）\n")
+
+    for row in picked:
+        who = "你" if row.get("r") == "u" else "我"
+        text = str(row.get("x", "")).strip()
+        if len(text) > 1200:
+            text = text[:1200] + f"…（截断，原文 {len(row.get('x', ''))} 字）"
+        print(f"── {fmt_time(row.get('t'))} {who} ──")
+        print(text)
+        print()
+    return 0
+
+
+def cmd_list(days: float = 0, limit: int = 0) -> int:
+    """列出所有会话：时间 / id / 消息数 / 大小 / 首句用户消息。
+
+    这是「找 3 天前的对话」的第一步——先看见有哪些，再决定挖哪个。
+    搜索只能在你记得关键词时用；不记得关键词时，只有清单能救你。
+    """
+    if index_is_stale():
+        build_index()
+    rows = load_index()
+
+    by_session: dict[str, list[dict]] = {}
+    for row in rows:
+        by_session.setdefault(row["s"], []).append(row)
+
+    cutoff_ms = (time.time() - days * 86400) * 1000 if days > 0 else 0
+
+    entries = []
+    for path in session_files():  # 已按 mtime 倒序
+        sid = path.parent.name.replace("session-", "")
+        short = sid[:8]
+        mtime_ms = path.stat().st_mtime * 1000
+        if cutoff_ms and mtime_ms < cutoff_ms:
+            continue
+        msgs = by_session.get(short, [])
+        user_msgs = [m for m in msgs if m.get("r") == "u"]
+        title = ""
+        if user_msgs:
+            earliest = min(user_msgs, key=lambda m: m.get("t") or 0)
+            title = " ".join(str(earliest.get("x", "")).split())[:100]
+        entries.append({
+            "short": short,
+            "full": sid,
+            "mtime": mtime_ms,
+            "size": path.stat().st_size,
+            "count": len(msgs),
+            "title": title,
+            "dir": str(path.parent),
+        })
+
+    if limit and limit > 0:
+        entries = entries[:limit]
+
+    if not entries:
+        print("没有符合条件的会话。")
+        return 0
+
+    print(f"{len(entries)} 个会话（按文件时间倒序）\n")
+    for e in entries:
+        print(f"{fmt_time(e['mtime'])}  [{e['short']}]  "
+              f"{e['count']:>5} 条  {e['size'] / 1024 / 1024:>6.1f} MB")
+        if e["title"]:
+            print(f"   {e['title']}")
+        print()
+    print("读某个会话的原文： lab sessions --show " + entries[0]["short"])
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Grep DSH session logs on disk (every keyword must appear, case-insensitive).",
@@ -210,12 +296,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=20, help="stop after N hits (default 20)")
     parser.add_argument("--days", type=float, default=0, help="only messages from the last N days")
     parser.add_argument("--build", action="store_true", help="force rebuild the index, then exit")
+    parser.add_argument("--list", action="store_true", help="list every session (time / id / messages / size / first user line)")
+    parser.add_argument("--show", metavar="ID", help="print one session's turns (default last 40; combine with --limit / --head)")
+    parser.add_argument("--head", action="store_true", help="with --show, start from the first turn instead of the last")
     parser.add_argument("--stats", action="store_true", help="show index status, then exit")
     parser.add_argument("--raw", action="store_true", help="skip the index and scan the zstd files directly (slow but authoritative)")
     args = parser.parse_args(argv)
 
     if args.stats:
         return cmd_stats()
+
+    if args.list:
+        return cmd_list(days=args.days, limit=args.limit)
+
+    if args.show:
+        return cmd_show(args.show, limit=args.limit if args.limit != 20 else 40, head=args.head)
 
     if args.build:
         build_index()

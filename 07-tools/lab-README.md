@@ -276,6 +276,131 @@ lab correction stats      # 按标签统计
 
 **判据**：这个工具只在「我被纠正」时写一条——**不写我本来就做对的事**，否则它就是流水账。
 
+---
+
+## 2026-11-03 新增的 8 个（按「什么时候用」组织）
+
+前 13 个是「我要做某事时去用它」；这 8 个不一样——**它们挂在某个高频动作上，到那个点才该触发**。所以先写触发信号，再写用法。
+
+| 子命令 | 触发信号（什么时候该想到它） | 一句话 |
+|---|---|---|
+| `selfcheck` | 刚装/卸插件、刚给 lab 加子命令、刚改 profile、或隐约觉得"文档说的跟实际不一样" | 查文档里的子命令/路径/计数跟磁盘对不对得上 |
+| `fact` | **要说任何数字/版本号/文件大小/条目数/路径之前** | 验这句话里的数有没有出处 |
+| `balance` | **报预算/说"这轮大概花多少"之前** | 真实余额 + 今日花费 |
+| `snapshot` | **改重要文件之前** | 拍快照，改坏了能退 |
+| `sessions` | 想说"上次/之前/以前做过吗"、用户提到具体日期、要判断"这事是不是已经做过" | 列会话清单 / 搜关键词 / 读原文 |
+| `claims` | 收尾说自己"做完了"之前 | 完成声明对账：日志/提交/文件接不接得住 |
+| `encoding` | 出现乱码、或要读非 UTF-8 的老文件 | 判编码 / 解码 / 修乱码 |
+| `config` | 改 DSH 配置之前 | 配置备份（白名单，不含 secrets） |
+| `tools` | 怀疑"某个能力白装了"、或想复盘"我到底用了哪些" | 从全部会话里数工具调用次数，列出零使用的 |
+
+### `lab tools` —— 装了不等于用了
+
+```bash
+lab tools            # 全量排行 + 零使用分组
+lab tools --never    # 只看零使用
+```
+
+从所有会话的 `tool-call` 事件里数，对照 `tool_stats.py` 里手写的 `KNOWN` 清单找缺口。
+
+**2026-11-03 首跑的真实结果**（28 个会话）：**76 个已知工具里 30 个一次都没调用过，使用率 60%**。
+
+零使用集中在四族：
+
+| 族 | 零使用的工具 | 我的判断 |
+|---|---|---|
+| 智能体团队 | `spawn_teammate` / `wait_agent` / `interrupt_agent` / `team_task_*`（7 个） | **该用未用**——`workflow` 用了 27 次，`spawn_teammate` 0 次。同一个能力的两条路，我只走了一条 |
+| 持久终端 | `terminal_*`（7 个） | **该用未用**——`pwsh` 被调了 2,932 次，每次都是新进程，`cd`/venv/变量全丢 |
+| MCP 资源 | `list_mcp_resources` / `read_mcp_resource` / `list_mcp_resource_templates` | 场景少（OpenDesign 不常开） |
+| 目标 / worktree | `create_goal` / `get_goal` / `update_goal` / `worktree_create` / `worktree_remove` | 场景少（长任务、并行开发） |
+
+**这个工具的价值不是"催我把 30 个都用上"**——大部分场景本来就用不上。价值是**把"该用未用"和"本来就用不上"分开**，前者才是真缺口。
+
+**清单外但用过的**（如 `evolve_inbox_done`）会单独列出——那说明 `KNOWN` 该更新了。**清单会过期，但过期本身有用。**
+
+### `lab selfcheck` —— 机制跟能力对不对得上
+
+```bash
+lab selfcheck            # 四组检查，返回码 0=一致 1=有漂移
+lab selfcheck --only 3   # 只跑第 3 组（计数断言）
+lab selfcheck --json
+```
+
+四组：①`lab <子命令>` 引用是否存在 ②绝对路径引用 ③计数断言（"N 个子命令" / "N 个 bundle"）④文档互引断链。
+
+**为什么需要它**：能力涨了、文档没跟上，我就按一个不存在的世界行动——**这比没有机制更坏**。2026-11-03 第一次跑就抓到 2 处真漂移：`架构文档/README.md` 写「25 个 bundle」实际 31、`我的能力清单.md` 写「13 个子命令」实际 24。
+
+**它区分「真漂移」和「提案/历史」**：`SOFT_MARKERS` 命中的行（"→ 不写死"、"已改"、"曾经"、"如果一周内"、"抄："…）降级成 💬 提示、不计入失败。**不这么分，误报会把真信号淹掉**——第一版 15 处里只有 2 处是真的。
+
+**有意思的自指**：我写这条 SKILL 行时又带上了那两个过期数字当例子，**被它自己抓到了**。写在文档里的数字一定会过期，哪怕写它的目的是提醒数字会过期。
+
+### `lab fact` —— 说数字之前先查
+
+```bash
+lab fact "SKILL.md 45,930 B，见 E:\...\SKILL.md:147（实测）"   # 全绿
+lab fact "我改了 SKILL.md，43 条规矩，13 个 lab 子命令"          # 两条 ⚠️，退出码 1
+```
+
+**它验的是「有没有出处」，不是「对不对」**——机器不知道"什么算一条规矩"，所以判不了真值。它只回答一个问题：**这个数字旁边有没有引用、行号、实测记录**。
+
+⚠️ 的含义是"这句话里的事实没有出处"，不是"这句话是假的"。补出处，或者改说"我没查，这是印象"。
+
+**为什么需要它**：2026-11-03 一天里 8 次违规，**5 次是数字编错**（"43 条规矩"、"13 个子命令"、"28,000 报警线"…）。写完才发现——**说数字是每分钟都在发生的高频动作，而第 17 条只管"完成"这个低频大节点**，所以拦不住。
+
+**第一版设计是错的**：想自动验证数字对不对，实测只验出 1 个路径、其余全 ❓、抓不到任何错。改成"验出处"之后 7/7。
+
+### `lab snapshot` —— 改重要文件前拍一张
+
+```bash
+lab snapshot now <path>          # 拍快照
+lab snapshot list --path <path>  # 列这张文件的历史快照
+lab snapshot restore <id>        # 恢复到某条（恢复前会再拍一次，所以恢复本身可撤）
+lab snapshot undo <path>         # 回退上一次，可连调：v3→v2→v1
+```
+
+存在 `~/.dsh\devkit\checkpoints\`，**跟 `dsh-self-guard` 插件共享同一份存储**——插件自动拍的、我手动拍的，在同一个地方能查到。
+
+**存储逻辑抄自 `dsh-local-devkit` 的 `CheckpointStore`**：文件不存在时记 `existed:false`（恢复时删除）；超过 4 MB 记 `skipped:'too-large'`；只留最近 500 条。
+
+**为什么需要手动版**：插件只在 `write`/`edit` 工具上生效，**我用 PowerShell `Set-Content` 改文件它抓不到**——改重要文件时要主动补一刀。
+
+### `lab sessions` —— 找以前的对话
+
+```bash
+lab sessions                              # 列全部：时间 / id / 条数 / 大小 / 首句
+lab sessions 关键词 --days 7              # 搜（--all 也搜我的回复）
+lab sessions --show <id> [--head]         # 读原文（默认末 40 条）
+```
+
+实测：30 会话 / 1,367 条消息，索引重建 1.9 秒，之后搜 0.01 秒。
+
+**核心判断**：**能力本来就有，缺的是「看得见的入口」**——搜索只在你记得关键词时才管用；不记得关键词时，只有清单能救。
+
+**读了 `dsh-manage-session`（792 KB）之后决定不抄**：它是 `inject = ["webServer","webStartup"]`、直接读磁盘 `.zstd`，主体是 GUI 面板 + webServer 路由。核心能力我这边早就有，只缺 `--list` / `--show` 两个模式。
+
+### `lab balance` —— 真实余额 + 今日花费
+
+```bash
+lab balance          # 余额 CNY 37.67 / 今日 0.06 元
+lab balance --json
+```
+
+走 `https://api.deepseek.com/user/balance`，key 从 `~/.dsh\.credentials.yaml` 的 `DEEPSEEK_API_KEY` 读。今日花费**用余额差值估算**（首日只记基线、记 0），因为平台账单接口要另一个 token。
+
+**为什么需要它**：报预算时我在猜。2026-11-03 估 2.5 元、实际 14 元，**差 5.6 倍**。
+
+### `lab encoding` / `lab claims` / `lab config`
+
+```bash
+lab encoding detect <file> [--explain]   # 判编码，--explain 说依据
+lab encoding read <file>                 # 按判出来的编码解
+lab encoding fix <乱码文本>              # 试 latin1/gbk/utf-16le 恢复
+lab claims [--date YYYY-MM-DD]           # 我说"做完了"，日志/提交/文件接不接得住
+lab config                               # DSH 配置备份（白名单，不含 secrets）
+```
+
+`encoding` 抄 `dsh-encoding` 的判据：BOM → 奇数位零字节占比 → 严格 UTF-8 校验 → 高位字节占比 → gbk / binary。**它保住 BOM 信息**（不把 utf-16le 猜成 utf-8），恢复时给 `{ok, text, note}`；含 U+FFFD 时 `ok=False` 并明说"更早的误解码已销毁，救不回来"。回归 9/9。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF

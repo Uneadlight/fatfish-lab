@@ -1245,7 +1245,88 @@ def build_parser() -> argparse.ArgumentParser:
   cl.add_argument('--json', action='store_true', help='JSON 输出')
   cl.set_defaults(func=cmd_claims)
 
+  fa = sub.add_parser('fact', help='事实核对：把我话里的数字/路径/版本号/行号逐个验证')
+  fa.add_argument('text', nargs='*', help='要检查的文本（不给就走 stdin）')
+  fa.add_argument('--file', help='从文件读文本')
+  fa.set_defaults(func=cmd_fact)
+
+  bal = sub.add_parser('balance', help='DeepSeek 余额 + 今日花费估算（抄自 dsh-balance-tracker）')
+  bal.add_argument('--json', action='store_true', help='输出 JSON')
+  bal.set_defaults(func=cmd_balance)
+
+  sn = sub.add_parser('snapshot', help='文件快照：改文件前存一份，改坏了能退（抄自 dsh-local-devkit）')
+  sn_sub = sn.add_subparsers(dest='snap_cmd', required=True)
+  sn_now = sn_sub.add_parser('now', help='给某个文件拍快照')
+  sn_now.add_argument('path')
+  sn_list = sn_sub.add_parser('list', help='列出快照（按时间倒序）')
+  sn_list.add_argument('--path', help='只看这个路径')
+  sn_list.add_argument('--limit', type=int, default=20)
+  sn_restore = sn_sub.add_parser('restore', help='恢复到某条快照（恢复前会再拍一次，可逆）')
+  sn_restore.add_argument('id')
+  sn_undo = sn_sub.add_parser('undo', help='回退这条路径的上一次（可连续调用 v3→v2→v1）')
+  sn_undo.add_argument('path')
+  sn.set_defaults(func=cmd_snapshot)
+
+  ec = sub.add_parser('encoding', help='判编码 / 解码 / 修乱码（抄自 dsh-encoding）')
+  ec.add_argument('rest', nargs=argparse.REMAINDER, help='detect/read/fix 及其参数，原样透传')
+  ec.set_defaults(func=cmd_encoding)
+
+  ss = sub.add_parser('sessions', help='会话管理：列清单 / 读原文 / 搜索（治「找不到以前的对话」）')
+  ss.add_argument('keywords', nargs='*', help='搜索关键词（不给且无 --list/--show 时默认列清单）')
+  ss.add_argument('--list', action='store_true', help='列出所有会话')
+  ss.add_argument('--show', metavar='ID', help='打印某个会话的原文')
+  ss.add_argument('--head', action='store_true', help='配合 --show，从头而不是从尾')
+  ss.add_argument('--all', action='store_true', help='搜索时也匹配我的回复')
+  ss.add_argument('--days', type=float, default=0, help='只看最近 N 天')
+  ss.add_argument('--limit', type=int, default=20)
+  ss.add_argument('--stats', action='store_true', help='索引状态')
+  ss.set_defaults(func=cmd_sessions)
+
+  sc = sub.add_parser('selfcheck', help='机制随能力漂移：文档里的子命令/路径/计数跟磁盘对不对得上')
+  sc.add_argument('--json', action='store_true')
+  sc.add_argument('--only', type=int, help='只跑第 N 组（1 起）')
+  sc.set_defaults(func=cmd_selfcheck)
+
+  tl = sub.add_parser('tools', help='工具使用率：我有的工具里哪些一次都没调用过（治「装了不用」）')
+  tl.add_argument('--top', type=int, default=0, help='只显示前 N 个（0=全部）')
+  tl.add_argument('--never', action='store_true', help='只显示零使用清单')
+  tl.set_defaults(func=cmd_tools)
+
   return parser
+
+
+def cmd_tools(a: argparse.Namespace) -> int:
+  """工具使用率：从所有会话的 tool-call 事件里数，对照手写的 KNOWN 清单找零使用。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'tool_stats.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'top', 0):
+    args += ['--top', str(a.top)]
+  if getattr(a, 'never', False):
+    args.append('--never')
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_selfcheck(a: argparse.Namespace) -> int:
+  """机制随能力漂移检测：文档里写的子命令/路径/计数，跟磁盘上的是不是一回事。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'selfcheck.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'json', False):
+    args.append('--json')
+  if getattr(a, 'only', None):
+    args += ['--only', str(a.only)]
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
 
 
 def cmd_claims(a: argparse.Namespace) -> int:
@@ -1261,6 +1342,117 @@ def cmd_claims(a: argparse.Namespace) -> int:
     args.append('--all')
   if getattr(a, 'json', False):
     args.append('--json')
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_fact(a: argparse.Namespace) -> int:
+  """事实核对（治「把记忆当事实」）：把话里的数字/路径/版本号/行号逐个验证。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'fact.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'file', None):
+    args += ['--file', a.file]
+  elif getattr(a, 'text', None):
+    args += list(a.text)
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_balance(a: argparse.Namespace) -> int:
+  """查 DeepSeek 余额 + 今日花费估算。抄自 dsh-balance-tracker，改成 CLI 不需要插件。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'balance.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'json', False):
+    args.append('--json')
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_snapshot(a: argparse.Namespace) -> int:
+  """文件快照。抄自 dsh-local-devkit 的 CheckpointStore——它能自动快照是因为挂了
+  tools/execute 钩子；我拿不到钩子，所以只能手动拍，但存储/恢复逻辑一样。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'snapshot.py'
+  cmd = a.snap_cmd
+  args = [sys.executable, str(script), cmd]
+  if cmd in ('now', 'undo'):
+    args.append(a.path)
+  elif cmd == 'restore':
+    args.append(a.id)
+  elif cmd == 'list':
+    p = getattr(a, 'path', None)
+    if p:
+      args += ['--path', p]
+    if getattr(a, 'limit', None):
+      args += ['--limit', str(a.limit)]
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_encoding(a: argparse.Namespace) -> int:
+  """判编码 / 解码 / 修乱码。抄自 dsh-encoding 的零依赖判据。
+  治的是「Get-Content 按 GBK 解 UTF-8 → 我误判数据坏了」。"""
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'encoding.py'
+  args = [sys.executable, str(script)] + list(getattr(a, 'rest', []) or [])
+  if not args[2:]:
+    print('用法: lab encoding {detect|read|fix} ...', file=sys.stderr)
+    return 2
+  r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
+  if r.stdout:
+    print(r.stdout, end='')
+  if r.stderr:
+    print(r.stderr, file=sys.stderr, end='')
+  return r.returncode
+
+
+def cmd_sessions(a: argparse.Namespace) -> int:
+  """会话管理：列清单 / 读原文 / 搜索。治「想找 3 天前那次对话，翻了半天」。
+
+  能力本来是有的（session_grep.py 早就写好了），缺的是**看得见的入口**——
+  记不住关键词时，只有清单能救我。
+  """
+  import subprocess as _sp
+  script = ROOT / 'tools' / 'lab' / 'session_grep.py'
+  args = [sys.executable, str(script)]
+  if getattr(a, 'stats', False):
+    args.append('--stats')
+  elif getattr(a, 'show', None):
+    args += ['--show', a.show]
+    if getattr(a, 'head', False):
+      args.append('--head')
+    args += ['--limit', str(a.limit)]
+  elif getattr(a, 'list', False) or not (a.keywords or []):
+    args.append('--list')
+    if a.days:
+      args += ['--days', str(a.days)]
+    if a.limit:
+      args += ['--limit', str(a.limit)]
+  else:
+    args += list(a.keywords)
+    if getattr(a, 'all', False):
+      args.append('--all')
+    args += ['--limit', str(a.limit)]
+    if a.days:
+      args += ['--days', str(a.days)]
   r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
   if r.stdout:
     print(r.stdout, end='')
