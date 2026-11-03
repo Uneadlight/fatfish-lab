@@ -35,7 +35,18 @@ ASAR = Path(r'D:\DeepSeek Harness\resources\app.asar')
 DEFAULT_REPO = ROOT / 'repos' / 'dafeiyu-lab'  # 本地目录名仍是 dafeiyu-lab，远端仓库名是 fatfish-lab
 DEFAULT_PLAN = ROOT / 'tools' / 'lab' / 'release-plan.txt'
 
-REQUIRED_SECTIONS = ('**做了什么**', '**为什么**', '**取舍**', '**教训**')
+REQUIRED_SECTIONS = ('做了什么', '为什么', '取舍', '教训')
+
+
+def _has_section(body: str, name: str) -> bool:
+  """这一节算不算写了：`**做了什么**`（行内加粗）或 `## 做了什么`（markdown 标题）都算。
+
+  2026-11-03 修：原来只认 `**X**`，我自己用 `## X` 写就被误报。
+  判据应该是「有没有这个分段」，不是「用哪种标记语法」。
+  """
+  import re as _re
+  pat = r'(\*\*\s*' + _re.escape(name) + r'\s*\*\*)|(^#{2,4}\s*' + _re.escape(name) + r')'
+  return _re.search(pat, body, _re.MULTILINE) is not None
 
 JOURNAL = ROOT / 'tools' / 'lab' / 'journal.jsonl'
 # 纠正日志：用户纠正我时，记下「原话 / 我原来的想法 / 改成了什么」。
@@ -109,9 +120,9 @@ def cmd_log(a: argparse.Namespace) -> int:
     return _fail(1, '需要 --body-file 或 --stdin')
 
   body = body.strip()
-  missing = [s for s in REQUIRED_SECTIONS if s not in body]
+  missing = [s for s in REQUIRED_SECTIONS if not _has_section(body, s)]
   if missing:
-    print(f'[WARN] 缺小标题: {", ".join(missing)}')
+    print(f'[WARN] 缺小标题: {", ".join(missing)}（写 **做了什么** 或 ## 做了什么 都算）')
 
   entry = f'\n## {a.mark} {a.title}\n\n{body}\n'
   if a.dry:
