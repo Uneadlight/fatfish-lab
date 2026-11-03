@@ -59,9 +59,16 @@ def read(p: Path) -> str:
 
 
 def lab_subcommands() -> set[str]:
-    """从 lab.py 的 argparse 定义里抓出所有子命令名。"""
+    """从 lab.py 的 argparse 定义里抓出**顶层**子命令名。
+
+    为什么不能只写 `sub\\.add_parser`：`snapshot` 那组是两级子命令，
+    代码里是 `sn_sub.add_parser('now', ...)`——它含有 `sub.add_parser`
+    这个子串，正则会把 now/list/restore/undo 当成顶层（多算 4 个）。
+    2026-11-03 实测：正则和 AST 都抓到 25 个，而 `lab --help` 只列 21 个，
+    差的正好是 snapshot 的四个动作。加 lookbehind 排掉 `sn_sub` 这种。
+    """
     src = read(LAB_PY)
-    return set(re.findall(r"sub\.add_parser\('([\w-]+)'", src))
+    return set(re.findall(r"(?<![\w.])sub\.add_parser\('([\w-]+)'", src))
 
 
 def skill_lab_refs() -> dict[str, list[tuple[str, int, str]]]:
