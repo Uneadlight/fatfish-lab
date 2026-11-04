@@ -148,17 +148,54 @@ def sync(name: str) -> dict:
     return {'name': name, 'copied': copied}
 
 
+_STARTED_CACHE: dict[str, float | None] = {}
+
+
+def dsh_started_at() -> float | None:
+    """DSH 主进程启动时间（epoch 秒）。拿不到返回 None。
+
+    为什么要它：`restart_hint` 原来只会说「文件 3 分钟前改过，要重启」——
+    但如果我在那之后已经重启过了，它还在喊。有进程启动时间才能答「到底要不要重启」。
+    进程名两个都认：新版叫 `DeepSeek Harness`，老版叫 `DSH Desktop`。
+    """
+    if 'v' in _STARTED_CACHE:
+        return _STARTED_CACHE['v']
+    import subprocess
+    ps = ("$p = Get-Process -Name 'DeepSeek Harness','DSH Desktop' -ErrorAction SilentlyContinue "
+          "| Sort-Object StartTime | Select-Object -First 1; "
+          "if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }")
+    val = None
+    try:
+        r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
+                           capture_output=True, text=True, timeout=15)
+        s = (r.stdout or '').strip()
+        if s:
+            from datetime import datetime
+            val = datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
+    except Exception:
+        val = None
+    _STARTED_CACHE['v'] = val
+    return val
+
+
 def restart_hint(name: str) -> str:
     """判断「改完要不要重启」。进程没重启时，改了文件也没生效。"""
     d = dst_dir(name)
     if not d.is_dir():
         return ''
     newest = max((f.stat().st_mtime for f in d.rglob('*') if f.is_file()), default=0)
-    # 找当前 DSH 主进程的启动时间（拿个近似：用 python 进程不行，用文件时间对比）
-    # 这里只能给「最后修改」和「现在」的差，具体要不要重启由调用者判断
-    age_min = (time.time() - newest) / 60 if newest else 0
+    if not newest:
+        return ''
+    started = dsh_started_at()
+    if started is not None:
+        # 有进程启动时间，直接答「要不要重启」
+        if newest > started:
+            gap = (newest - started) / 60
+            return f'⚠️  文件比 DSH 进程新 {gap:.0f} 分钟——**必须重启才生效**'
+        return ''
+    age_min = (time.time() - newest) / 60
     if age_min < 5:
-        return f'⚠️  文件 {age_min:.0f} 分钟前刚改过——**必须重启 DSH 才生效**'
+        return f'⚠️  文件 {age_min:.0f} 分钟前刚改过——**必须重启 DSH 才生效**（拿不到进程启动时间）'
     return ''
 
 
@@ -166,6 +203,7 @@ def cmd_deploy(names: list[str], check: bool) -> int:
     print(f'{"=== 只检查 ===" if check else "=== 同步 ==="}')
     print()
     total_bad = 0
+    need_restart: list[tuple[str, str]] = []
     for name in names:
         s = src_dir(name)
         d = dst_dir(name)
@@ -173,6 +211,10 @@ def cmd_deploy(names: list[str], check: bool) -> int:
 
         if kind == 'link':
             print(f'✅ {name:<30} 软链 → 改源码即生效')
+            # 软链也要看：改了源码但没重启，跑的仍是旧模块
+            h = restart_hint(name)
+            if h:
+                need_restart.append((name, h))
             continue
         if kind == 'missing':
             print(f'❌ {name:<30} profile 里没装')
@@ -186,6 +228,9 @@ def cmd_deploy(names: list[str], check: bool) -> int:
         before = compare(name)
         if before.get('in_sync'):
             print(f'✅ {name:<30} 已同步（{before["same"]} 个文件一致）')
+            h = restart_hint(name)
+            if h:
+                need_restart.append((name, h))
             continue
 
         total_bad += 1
@@ -198,6 +243,9 @@ def cmd_deploy(names: list[str], check: bool) -> int:
                 print(f'      内容不同: {k}')
             for k in before.get('only_dst', [])[:5]:
                 print(f'      仅 profile 有: {k}')
+            h = restart_hint(name)
+            if h:
+                need_restart.append((name, h))
             continue
 
         # 同步前先备份 profile 那一份
@@ -219,6 +267,15 @@ def cmd_deploy(names: list[str], check: bool) -> int:
             print(f'   {hint}')
 
     print()
+    if need_restart:
+        print('⚠️  以下文件比 DSH 进程新，改了还没生效：')
+        for n, h in need_restart:
+            print(f'   {n}')
+        started = dsh_started_at()
+        if started:
+            print(f'   （DSH 进程启动于 {time.strftime("%m-%d %H:%M:%S", time.localtime(started))}）')
+        print('   → 关掉 DSH 再打开，这些改动才会真正加载。')
+        print()
     if check:
         print(f'共 {total_bad} 个需要同步' if total_bad else '全部已同步')
     else:
