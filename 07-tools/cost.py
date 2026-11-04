@@ -23,6 +23,9 @@ LOG = Path.home() / '.local' / 'state' / 'billion-context' / 'bili.log'
 LINE_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+\s+\[\w+\].*?\[acp-usage\]\s+input=(\d+)\s+cached=(\d+)'
 )
+# bili 的每行 usage 带会话标记，格式 [sess=session-<uuid>]。
+# 有这个就能回答「当前这轮/这个会话花了多少」，而不是只能看一个时间窗口。
+SESS_RE = re.compile(r'\[sess=([^\]]+)\]')
 
 # (空闲, 高峰) 元/百万 token
 PRICE_HIT = (0.02, 0.04)
@@ -68,17 +71,79 @@ def load(since: datetime | None = None) -> list[dict]:
                     continue
                 inp = int(m.group(2))
                 cached = int(m.group(3))
-                rows.append({'t': t, 'in': inp, 'cached': cached, 'peak': is_peak(t)})
+                sm = SESS_RE.search(line)
+                rows.append({'t': t, 'in': inp, 'cached': cached, 'peak': is_peak(t),
+                             'sess': sm.group(1) if sm else ''})
     rows.sort(key=lambda r: r['t'])
     return rows
+
+
+def report_session(rows: list[dict], sess: str) -> None:
+    """一个会话内部的成本视图——回答「这一轮花了多少、比上一轮贵几倍」。
+
+    为什么单独一个视图：`--hours` 的汇总回答不了「刚才这一轮多少钱」，
+    而会话内相邻请求的比值可以直接暴露「上下文炸了」——同一次对话里
+    第 1 次和第 50 次请求的成本可能差 10 倍以上。
+    """
+    total_in = sum(r['in'] for r in rows)
+    total_cached = sum(r['cached'] for r in rows)
+    total_cost = sum(cost_of(r['in'], r['cached'], r['peak']) for r in rows)
+    hit_pct = (total_cached / total_in * 100) if total_in else 0
+    print(f'[COST] 会话 {sess}')
+    print(f'  {len(rows)} 次请求 · input {total_in:,} tok / cached {total_cached:,} tok（命中 {hit_pct:.1f}%）')
+    print(f'  估算合计 ¥{total_cost:.4f}（只算 input；绝对值偏低约 2.4 倍，看相对）')
+    print()
+    show = rows[-8:]
+    print(f'  最近 {len(show)} 次请求（×N = 相对上一次的 input 倍数，input 决定成本）:')
+    prev = None
+    for r in show:
+        c = cost_of(r['in'], r['cached'], r['peak'])
+        h = (r['cached'] / r['in'] * 100) if r['in'] else 0
+        ratio = '' if prev is None else f'  ×{r["in"] / prev:.2f}'
+        print(f'    {r["t"].strftime("%H:%M:%S")}  {r["in"]:>9,} tok  命中 {h:>5.1f}%  ¥{c:.6f}{ratio}')
+        prev = r['in']
+    last = rows[-1]
+    last_cost = cost_of(last['in'], last['cached'], last['peak'])
+    print()
+    print(f'  这一轮（最后一次请求）input {last["in"]:,} tok ≈ ¥{last_cost:.6f}')
+    if len(rows) > 1:
+        avg = sum(r['in'] for r in rows[:-1]) / (len(rows) - 1)
+        if avg:
+            word = '贵' if last['in'] > avg else '便宜'
+            print(f'  比这个会话之前的平均请求（{avg:,.0f} tok）{word} {last["in"] / avg:.2f} 倍')
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='按时间窗口算 token 成本（数据源 bili.log）')
     ap.add_argument('--hours', type=float, default=24, help='看最近几小时，默认 24')
     ap.add_argument('--recent', type=int, default=0, help='只看最近 N 次请求')
+    ap.add_argument('--session', nargs='?', const='', default=None,
+                    help='只看某个会话（不带值 = 日志里最新的会话）')
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args()
+
+    # 会话模式不限时间窗口：一个长会话可能横跨好几个小时，按 --hours 切会把前半段吃掉。
+    if a.session is not None:
+        all_rows = load(None)
+        sess = a.session or (all_rows[-1]['sess'] if all_rows else '')
+        if not sess:
+            print(f'[FAIL] 判断不出当前会话：日志里没有 [sess=...] 标记（bili.log: {LOG}）')
+            sys.exit(1)
+        rows = [r for r in all_rows if r['sess'] == sess]
+        if not rows:
+            print(f'[FAIL] 会话 {sess} 没有 [acp-usage] 记录（bili.log: {LOG}）')
+            sys.exit(1)
+        if a.json:
+            import json
+            tin = sum(r['in'] for r in rows)
+            tc = sum(r['cached'] for r in rows)
+            print(json.dumps({'session': sess, 'requests': len(rows), 'input': tin,
+                              'cached': tc,
+                              'cost': round(sum(cost_of(r['in'], r['cached'], r['peak']) for r in rows), 6)},
+                             ensure_ascii=False, indent=2))
+        else:
+            report_session(rows, sess)
+        return
 
     since = datetime.now() - timedelta(hours=a.hours)
     rows = load(since)

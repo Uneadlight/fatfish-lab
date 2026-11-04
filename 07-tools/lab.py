@@ -1369,6 +1369,8 @@ def build_parser() -> argparse.ArgumentParser:
   co = sub.add_parser('cost', help='这一步花了多少钱：从 bili.log 读 acp-usage，按小时聚合（只算 input）')
   co.add_argument('--hours', type=float, default=24, help='看最近几小时，默认 24')
   co.add_argument('--recent', type=int, default=0, help='只看最近 N 次请求')
+  co.add_argument('--session', nargs='?', const='', default=None,
+                  help='只看某个会话（不带值 = 日志里最新的会话），回答「这一轮花了多少」')
   co.add_argument('--json', action='store_true', help='输出 JSON')
   co.set_defaults(func=cmd_cost)
 
@@ -1572,6 +1574,10 @@ def cmd_cost(a: argparse.Namespace) -> int:
   cmd = [sys.executable, str(script), '--hours', str(a.hours)]
   if a.recent:
     cmd += ['--recent', str(a.recent)]
+  if a.session is not None:
+    cmd.append('--session')
+    if a.session:
+      cmd.append(a.session)
   if a.json:
     cmd.append('--json')
   return _sp.run(cmd).returncode

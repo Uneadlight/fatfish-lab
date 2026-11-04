@@ -431,6 +431,22 @@ lab balance --json
 
 **为什么需要它**：报预算时我在猜。2026-11-03 估 2.5 元、实际 14 元，**差 5.6 倍**。
 
+### `lab cost` —— 这一轮花了多少钱（治 P2「花费不可见」）
+
+```bash
+lab cost                    # 最近 24 小时汇总，按小时分布（标出高峰/空闲）
+lab cost --recent 6         # 只看最近 6 次请求
+lab cost --session          # 只看当前会话（= 日志里最新的 [sess=...]）
+lab cost --session <id>     # 只看指定会话
+lab cost --session --json
+```
+
+数据源是 bili 日志里的 `[acp-usage]` 行（`input=` / `cached=`），**只有 input 没有 output**（output 约占 0.3%，误差可接受）。
+
+**`--session` 解决的是什么**：`--hours` 回答不了「刚才这一轮多少钱」，而会话内相邻请求的 input 倍数能直接看出上下文炸没炸——同一个会话里第 1 次和第 50 次请求成本能差 10 倍以上。判断方式看 `×N` 那列（相对上一次的 input 倍数，input 决定成本），最后一行给「比本会话平均请求贵几倍」。
+
+**边界**：绝对值**低于官方账单约 2.4 倍**（bili 算"前缀字节命中"、官方算"计费 token 命中"）——看相对分布和趋势可信，看绝对值不可信；真要报预算用 `lab balance` 的余额差值。
+
 ### `lab encoding` / `lab claims` / `lab config`
 
 ```bash
