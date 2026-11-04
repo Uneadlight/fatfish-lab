@@ -1341,7 +1341,36 @@ def build_parser() -> argparse.ArgumentParser:
   li.add_argument('--strict', action='store_true', help='有问题就返回 1（默认只提示，返回 0）')
   li.set_defaults(func=cmd_lint)
 
+  assets_p = sub.add_parser('assets', help='能力痕迹盘点：工作区每个目录/文件是什么、有没有说明、被谁引用')
+  assets_p.add_argument('--json', action='store_true', help='输出 JSON')
+  assets_p.add_argument('--top', type=int, default=0, help='只看最大的 N 个')
+  assets_p.add_argument('--name', default=None, help='只看名字含该串的')
+  assets_p.add_argument('--budget', type=float, default=4.0, help='每个目录算大小的秒数上限（默认 4）')
+  assets_p.add_argument('--junk', action='store_true', help='只列「小件且无任何记录」的（清理候选）')
+  assets_p.set_defaults(func=cmd_assets)
+
   return parser
+
+
+def cmd_assets(a: argparse.Namespace) -> int:
+  """资产盘点：转调同目录的 assets.py，保持单一实现（不复制逻辑）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('assets.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if a.json:
+    cmd.append('--json')
+  if a.junk:
+    cmd.append('--junk')
+  if a.top:
+    cmd += ['--top', str(a.top)]
+  if a.name:
+    cmd += ['--name', a.name]
+  if a.budget != 4.0:
+    cmd += ['--budget', str(a.budget)]
+  return _sp.run(cmd).returncode
 
 
 def cmd_tools(a: argparse.Namespace) -> int:
