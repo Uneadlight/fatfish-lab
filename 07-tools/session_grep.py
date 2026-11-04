@@ -128,7 +128,17 @@ def build_index(quiet: bool = False) -> dict:
                 text = message_text(record)
                 if not text.strip():
                     continue
-                row = {"t": record.get("time"), "s": session_id, "r": role, "x": text}
+                # turn/step 在 record['data'] 里（不在消息文本里）。
+                # 有它才能"回到那一刻"——按轮次定位，而不是只能按时间取尾巴。
+                data = record.get("data") or {}
+                row = {
+                    "t": record.get("time"),
+                    "s": session_id,
+                    "r": role,
+                    "x": text,
+                    "turn": data.get("turn"),
+                    "step": data.get("step"),
+                }
                 out.write(json.dumps(row, ensure_ascii=False) + "\n")
                 count += 1
 
@@ -201,8 +211,9 @@ def cmd_stats() -> int:
     return 0
 
 
-def cmd_show(session: str, limit: int = 40, head: bool = False) -> int:
-    """打印某个会话的原文（默认最后 40 条，--head 从头）。"""
+def cmd_show(session: str, limit: int = 40, head: bool = False,
+             at: int | None = None, around: int | None = None) -> int:
+    """打印某个会话的原文（默认最后 40 条，--head 从头，--at/--around 按 turn 定位）。"""
     if index_is_stale():
         build_index()
     rows = [r for r in load_index() if r["s"] == session]
@@ -215,16 +226,39 @@ def cmd_show(session: str, limit: int = 40, head: bool = False) -> int:
 
     rows.sort(key=lambda r: r.get("t") or 0)
     total = len(rows)
-    picked = rows[:limit] if head else rows[-limit:]
-    if not head and total > limit:
-        print(f"（共 {total} 条，只显示最后 {limit} 条；要前面用 --head，要全部用 --limit {total}）\n")
+
+    target = at if at is not None else around
+    if target is not None:
+        idx = None
+        for i, r in enumerate(rows):
+            if r.get("turn") == target:
+                idx = i
+                break
+        if idx is None:
+            turns = sorted({r.get("turn") for r in rows if r.get("turn") is not None})
+            span = f"{turns[0]}–{turns[-1]}" if turns else "（这个会话没有 turn 字段）"
+            print(f"会话 {session} 里没有 turn={target}。有的 turn：{span}")
+            return 1
+        if around is not None:
+            half = max(1, limit // 2)
+            lo, hi = max(0, idx - half), min(total, idx + half + 1)
+        else:
+            lo, hi = idx, min(total, idx + limit)
+        picked = rows[lo:hi]
+        print(f"（turn={target} 在第 {idx + 1}/{total} 条，显示第 {lo + 1}–{hi} 条）\n")
+    else:
+        picked = rows[:limit] if head else rows[-limit:]
+        if not head and total > limit:
+            print(f"（共 {total} 条，只显示最后 {limit} 条；要前面用 --head，要全部用 --limit {total}）\n")
 
     for row in picked:
         who = "你" if row.get("r") == "u" else "我"
+        turn, step = row.get("turn"), row.get("step")
+        stamp = f" T{turn}/S{step}" if turn is not None else ""
         text = str(row.get("x", "")).strip()
         if len(text) > 1200:
             text = text[:1200] + f"…（截断，原文 {len(row.get('x', ''))} 字）"
-        print(f"── {fmt_time(row.get('t'))} {who} ──")
+        print(f"── {fmt_time(row.get('t'))} {who}{stamp} ──")
         print(text)
         print()
     return 0
@@ -297,8 +331,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=float, default=0, help="only messages from the last N days")
     parser.add_argument("--build", action="store_true", help="force rebuild the index, then exit")
     parser.add_argument("--list", action="store_true", help="list every session (time / id / messages / size / first user line)")
-    parser.add_argument("--show", metavar="ID", help="print one session's turns (default last 40; combine with --limit / --head)")
+    parser.add_argument("--show", metavar="ID", help="print one session's turns (default last 40; combine with --limit / --head / --at / --around)")
     parser.add_argument("--head", action="store_true", help="with --show, start from the first turn instead of the last")
+    parser.add_argument("--at", type=int, metavar="TURN", help="with --show, start at this turn number")
+    parser.add_argument("--around", type=int, metavar="TURN", help="with --show, show messages around this turn")
     parser.add_argument("--stats", action="store_true", help="show index status, then exit")
     parser.add_argument("--raw", action="store_true", help="skip the index and scan the zstd files directly (slow but authoritative)")
     args = parser.parse_args(argv)
@@ -310,7 +346,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(days=args.days, limit=args.limit)
 
     if args.show:
-        return cmd_show(args.show, limit=args.limit if args.limit != 20 else 40, head=args.head)
+        return cmd_show(args.show, limit=args.limit if args.limit != 20 else 40,
+                        head=args.head, at=args.at, around=args.around)
 
     if args.build:
         build_index()
@@ -339,7 +376,9 @@ def main(argv: list[str] | None = None) -> int:
                     role = "a"
                 text = message_text(record)
                 if text.strip():
-                    rows.append({"t": record.get("time"), "s": session_id, "r": role, "x": text})
+                    data = record.get("data") or {}
+                    rows.append({"t": record.get("time"), "s": session_id, "r": role, "x": text,
+                                 "turn": data.get("turn"), "step": data.get("step")})
         source = f"原始文件（{len(session_files())} 个会话）"
     else:
         if index_is_stale():
