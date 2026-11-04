@@ -1368,6 +1368,13 @@ def build_parser() -> argparse.ArgumentParser:
   co.add_argument('--json', action='store_true', help='输出 JSON')
   co.set_defaults(func=cmd_cost)
 
+  er = sub.add_parser('errors', help='报错原文按工具聚合：只列原文和频次，不给建议动作')
+  er.add_argument('--days', type=int, default=7, help='最近几天，默认 7')
+  er.add_argument('--tool', default=None, help='只看某个工具的报错原文')
+  er.add_argument('--top', type=int, default=20, help='每个工具列前几条，默认 20')
+  er.add_argument('--json', action='store_true', help='输出 JSON')
+  er.set_defaults(func=cmd_errors)
+
   return parser
 
 
@@ -1402,6 +1409,21 @@ def cmd_cost(a: argparse.Namespace) -> int:
   cmd = [sys.executable, str(script), '--hours', str(a.hours)]
   if a.recent:
     cmd += ['--recent', str(a.recent)]
+  if a.json:
+    cmd.append('--json')
+  return _sp.run(cmd).returncode
+
+
+def cmd_errors(a: argparse.Namespace) -> int:
+  """报错原文按工具聚合：转调同目录的 errors.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('errors.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), '--days', str(a.days), '--top', str(a.top)]
+  if a.tool:
+    cmd += ['--tool', a.tool]
   if a.json:
     cmd.append('--json')
   return _sp.run(cmd).returncode
