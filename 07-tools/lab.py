@@ -1381,6 +1381,12 @@ def build_parser() -> argparse.ArgumentParser:
   st.add_argument('--json', action='store_true', help='输出 JSON')
   st.set_defaults(func=cmd_steps)
 
+  dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
+  dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
+  dp.add_argument('--all', action='store_true', help='全部自研插件')
+  dp.add_argument('--check', action='store_true', help='只比，不同步')
+  dp.set_defaults(func=cmd_deploy)
+
   return parser
 
 
@@ -1396,6 +1402,23 @@ def cmd_steps(a: argparse.Namespace) -> int:
     cmd.append('--verify')
   if a.json:
     cmd.append('--json')
+  return _sp.run(cmd).returncode
+
+
+def cmd_deploy(a: argparse.Namespace) -> int:
+  """同步自研插件到 profile：转调同目录的 deploy.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('deploy.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if a.all:
+    cmd.append('--all')
+  else:
+    cmd += list(a.names)
+  if a.check:
+    cmd.append('--check')
   return _sp.run(cmd).returncode
 
 
