@@ -1349,6 +1349,10 @@ def build_parser() -> argparse.ArgumentParser:
   assets_p.add_argument('--junk', action='store_true', help='只列「小件且无任何记录」的（清理候选）')
   assets_p.set_defaults(func=cmd_assets)
 
+  sk = sub.add_parser('skill', help='能力熟练度：真熟 / 用得费劲 / 还没用上（只分两层，不分时间跨度）')
+  sk.add_argument('--json', action='store_true', help='输出 JSON')
+  sk.set_defaults(func=cmd_skill)
+
   return parser
 
 
@@ -1370,6 +1374,19 @@ def cmd_assets(a: argparse.Namespace) -> int:
     cmd += ['--name', a.name]
   if a.budget != 4.0:
     cmd += ['--budget', str(a.budget)]
+  return _sp.run(cmd).returncode
+
+
+def cmd_skill(a: argparse.Namespace) -> int:
+  """能力熟练度：转调同目录的 skill_stats.py，保持单一实现。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('skill_stats.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if getattr(a, 'json', False):
+    cmd.append('--json')
   return _sp.run(cmd).returncode
 
 
