@@ -95,6 +95,60 @@ def scan(days: float = 3.0) -> list[dict]:
     return hits
 
 
+
+# ── 第二个视图：给了方案，但没先复述「你要的是什么」 ──
+# 这才是 P15 的硬判据：不靠否定词（误报多），靠结构（能不能对上）。
+PLAN_MARK = ['我的方案', '我建议', '我打算', '可以这样做', '我准备', '计划是',
+             '我倾向于', '两个选择', '三个方案', '方案 A', '方案一']
+RESTATE_MARK = ['你要的是', '你要我做的', '我理解你要', '你真正的意思', '复述一下']
+
+
+def scan_restate(days: float = 3.0) -> dict:
+    cutoff = time.time() - days * 86400
+    plans = restated = 0
+    misses = []
+    for p in sorted(SESS_ROOT.glob('*/session-*/session.v4.jsonl.zstd')):
+        try:
+            if p.stat().st_mtime < cutoff:
+                continue
+        except Exception:
+            continue
+        sid = p.parent.name.replace('session-', '')[:8]
+        recent: list[str] = []
+        for line in _unzstd(p):
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            t = rec.get('time') or 0
+            if t > 1e11:
+                t = t / 1000.0
+            if not t or t < cutoff:
+                continue
+            typ = rec.get('type')
+            if typ == 'user/message':
+                recent = []
+                continue
+            if typ != 'assistant/message':
+                continue
+            txt = _text_of(rec)
+            if not txt:
+                continue
+            has_plan = any(k in txt for k in PLAN_MARK)
+            has_restate = any(k in txt for k in RESTATE_MARK)
+            if has_plan:
+                plans += 1
+                if has_restate or any(any(k in r for k in RESTATE_MARK) for r in recent):
+                    restated += 1
+                else:
+                    head = txt.strip().replace('\n', ' ')[:100]
+                    misses.append({'t': t, 'sid': sid, 'head': head})
+            recent.append(txt)
+            if len(recent) > 2:
+                recent.pop(0)
+    return {'plans': plans, 'restated': restated, 'misses': misses}
+
+
 def main() -> int:
     rows = scan()
     if not rows:
@@ -125,6 +179,23 @@ def main() -> int:
     print()
     print(f'  3 天内 {len(rows)} 次 = 平均每天 {len(rows) / 3:.1f} 次')
     print('  （这只是「我自己能识别的否定」；更隐晦的纠正扫不出来）')
+    print()
+
+    # ── 第二个视图 ──
+    r = scan_restate()
+    print('=' * 70)
+    print(f'【给方案前有没有先复述「你要的是什么」】最近 3 天')
+    print('=' * 70)
+    print(f'  给方案 {r["plans"]} 次 / 其中先复述过 {r["restated"]} 次')
+    if r['plans']:
+        print(f'  ✅ 复述率 {r["restated"] * 100 // r["plans"]}%')
+    for m in r['misses'][:8]:
+        when = time.strftime('%m-%d %H:%M', time.localtime(m['t']))
+        print(f'    {when} [{m["sid"]}] {m["head"]}')
+    if r['misses']:
+        print()
+        print('  判据：一条回复里出现「我的方案/我建议/我打算/两个选择…」，但同一条或前 2 条里')
+        print('        没有「你要的是/你要我做的/我理解你要」——就算「没复述直接给方案」。')
     return 0
 
 
