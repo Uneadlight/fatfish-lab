@@ -1282,6 +1282,9 @@ def build_parser() -> argparse.ArgumentParser:
   cl.add_argument('--date', help='YYYY-MM-DD（默认今天）')
   cl.add_argument('--file', help='直接查某个 md 文件')
   cl.add_argument('--all', action='store_true', help='全部日期汇总')
+  cl.add_argument('--chat', action='store_true',
+                  help='扫会话记录里我的回复（形式完成真正发生的地方）')
+  cl.add_argument('--days', type=int, default=7, help='--chat 时看最近几天，默认 7')
   cl.add_argument('--json', action='store_true', help='JSON 输出')
   cl.set_defaults(func=cmd_claims)
 
@@ -1359,6 +1362,12 @@ def build_parser() -> argparse.ArgumentParser:
   tr.add_argument('--json', action='store_true', help='输出 JSON')
   tr.set_defaults(func=cmd_tier)
 
+  co = sub.add_parser('cost', help='这一步花了多少钱：从 bili.log 读 acp-usage，按小时聚合（只算 input）')
+  co.add_argument('--hours', type=float, default=24, help='看最近几小时，默认 24')
+  co.add_argument('--recent', type=int, default=0, help='只看最近 N 次请求')
+  co.add_argument('--json', action='store_true', help='输出 JSON')
+  co.set_defaults(func=cmd_cost)
+
   return parser
 
 
@@ -1380,6 +1389,21 @@ def cmd_assets(a: argparse.Namespace) -> int:
     cmd += ['--name', a.name]
   if a.budget != 4.0:
     cmd += ['--budget', str(a.budget)]
+  return _sp.run(cmd).returncode
+
+
+def cmd_cost(a: argparse.Namespace) -> int:
+  """这一步花了多少钱：转调同目录的 cost.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('cost.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), '--hours', str(a.hours)]
+  if a.recent:
+    cmd += ['--recent', str(a.recent)]
+  if a.json:
+    cmd.append('--json')
   return _sp.run(cmd).returncode
 
 
@@ -1456,6 +1480,9 @@ def cmd_claims(a: argparse.Namespace) -> int:
     args += ['--file', a.file]
   if getattr(a, 'all', False):
     args.append('--all')
+  if getattr(a, 'chat', False):
+    args.append('--chat')
+    args += ['--days', str(getattr(a, 'days', 7))]
   if getattr(a, 'json', False):
     args.append('--json')
   r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
