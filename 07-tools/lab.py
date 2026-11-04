@@ -1375,7 +1375,28 @@ def build_parser() -> argparse.ArgumentParser:
   er.add_argument('--json', action='store_true', help='输出 JSON')
   er.set_defaults(func=cmd_errors)
 
+  st = sub.add_parser('steps', help='时间轴能不能拼起来：assistant 消息有多少带 turn/step')
+  st.add_argument('--days', type=float, default=7.0, help='最近几天，默认 7')
+  st.add_argument('--verify', action='store_true', help='额外统计带 rc= 的验证记录')
+  st.add_argument('--json', action='store_true', help='输出 JSON')
+  st.set_defaults(func=cmd_steps)
+
   return parser
+
+
+def cmd_steps(a: argparse.Namespace) -> int:
+  """时间轴盘点：转调同目录的 steps.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('steps.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), '--days', str(a.days)]
+  if a.verify:
+    cmd.append('--verify')
+  if a.json:
+    cmd.append('--json')
+  return _sp.run(cmd).returncode
 
 
 def cmd_assets(a: argparse.Namespace) -> int:
