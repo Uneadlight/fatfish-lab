@@ -1397,6 +1397,18 @@ def build_parser() -> argparse.ArgumentParser:
   rv = sub.add_parser('review', help='复盘：完成声明证据率 + 被否定次数，写回复盘状态（P5 的触发点）')
   rv.set_defaults(func=cmd_review)
 
+  cd = sub.add_parser('cdp', help='通过 CDP 操作已经开着的浏览器（点元素/执行 JS/导航/截图）')
+  cd.add_argument('action', choices=['tabs', 'eval', 'click', 'goto', 'shot'])
+  cd.add_argument('arg', nargs='?', help='eval 的 JS / click 的选择器 / goto 的 URL / shot 的路径')
+  cd.add_argument('--tab', type=int, default=0, help='第几个 page 标签，默认 0')
+  cd.add_argument('--port', type=int, default=9222, help='CDP 端口，默认 9222')
+  cd.add_argument('--file', help='eval 从文件读 JS')
+  cd.add_argument('--json', action='store_true', help='输出 JSON')
+  cd.add_argument('--wait-ms', type=int, default=0, help='click 之后等多久（毫秒）')
+  cd.add_argument('--wait', type=float, default=15.0, help='goto 等 readyState 的上限秒数')
+  cd.add_argument('--await-promise', action='store_true', help='eval 时等 Promise 解析')
+  cd.set_defaults(func=cmd_cdp)
+
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
   dp.add_argument('--all', action='store_true', help='全部自研插件')
@@ -1580,6 +1592,41 @@ def cmd_cost(a: argparse.Namespace) -> int:
       cmd.append(a.session)
   if a.json:
     cmd.append('--json')
+  return _sp.run(cmd).returncode
+
+
+def cmd_cdp(a: argparse.Namespace) -> int:
+  """浏览器操作：转调同目录的 cdp.py（P3 有眼无手）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('cdp.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), '--port', str(a.port), a.action]
+  if a.action == 'tabs':
+    if a.json:
+      cmd.append('--json')
+  elif a.action == 'eval':
+    cmd += ['--tab', str(a.tab)]
+    if a.arg:
+      cmd.append(a.arg)
+    elif a.file:
+      cmd += ['--file', a.file]
+    if a.await_promise:
+      cmd.append('--await-promise')
+    if a.json:
+      cmd.append('--json')
+  elif a.action == 'click':
+    cmd += [a.arg or '', '--tab', str(a.tab)]
+    if a.wait_ms:
+      cmd += ['--wait-ms', str(a.wait_ms)]
+  elif a.action == 'goto':
+    cmd += [a.arg or '', '--tab', str(a.tab), '--wait', str(a.wait)]
+  elif a.action == 'shot':
+    cmd += [a.arg or '', '--tab', str(a.tab)]
+  else:
+    print(f'[ERROR] 未知动作 {a.action}', file=sys.stderr)
+    return 2
   return _sp.run(cmd).returncode
 
 

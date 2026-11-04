@@ -513,6 +513,34 @@ P5 的根因不是「看不到历史」（时间轴 100% 完整），是**没有
 **commit 里只读一个 JSON，绝不扫会话**（`scan(3)` 要 3 秒，会拖慢每次提交）；要数字的时候跑 `lab review`。
 状态文件：`D:\work\自进化\复盘状态.json`（`last_review` / `claims` / `backed` / `negatives` / `scanned`）；超过 3 天没复盘，提醒会带 `> 3 天` 字样。
 
+### `lab cdp` —— 点不了的网页（治 P3「有眼无手」）
+
+```powershell
+lab cdp tabs                          # 列 page 标签（序号 / 标题 / URL）
+lab cdp eval "document.title"         # 在页面里执行 JS，返回结果
+lab cdp eval --file check.js          # JS 太长就写成文件
+lab cdp click "#login-btn"            # 点击 CSS 选择器匹配到的元素
+lab cdp goto "https://example.com"    # 导航并等 readyState=complete
+lab cdp shot ".tmp/page.png"          # 截当前页面
+lab cdp tabs --port 9333              # 连别的调试端口
+```
+
+前提：浏览器要带 `--remote-debugging-port=9222` 启动（本机 Edge 一直开着，PID 8500）。
+连不上会打 `[FAIL] 连不上 CDP`，退出码 2；选择器找不到退出码 4。
+
+**实现**：`cdp.py` 里手写了一个最小 WebSocket 客户端（纯标准库）——runtime python 没有
+`websocket-client`/`websockets`/`playwright`，而给一个公开仓库加一条 pip 依赖不值得。要点：
+握手要 `Sec-WebSocket-Key`（16 字节 base64）、**客户端发出的帧必须 mask**、长度 ≥126 走扩展字节、
+收到 ping 要回 pong、处理分片（FIN 位）。
+
+**边界（写在 docstring 里，不靠自觉）**：只操作 `type=page` 的标签；不扫浏览历史、不读 cookie/localStorage；
+有登录态的页面只在被明确要求的那一刻动。`click` 走 DOM 的 `element.click()`（事件会冒泡，React 的 onClick 也吃得到），
+不是屏幕坐标点击；需要真实鼠标事件的场景（拖拽、canvas 绘制）它做不到。
+
+实测（2026-11-04，Edge 155 开在 DeepSeek 开放平台）：`tabs` 正确列出；`eval document.title` → `DeepSeek 开放平台`；
+`click body` → `[OK] 点击了 <BODY>`；`click #__no_such_element__` → `[FAIL]` 退出码 4；
+`shot` 出 143,458 B PNG，页面内容完整可读。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF
