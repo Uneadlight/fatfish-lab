@@ -1381,6 +1381,10 @@ def build_parser() -> argparse.ArgumentParser:
   st.add_argument('--json', action='store_true', help='输出 JSON')
   st.set_defaults(func=cmd_steps)
 
+  sa = sub.add_parser('session-age', help='会话年龄：这个对话一共承载了多少内容、相当于多少个新对话')
+  sa.add_argument('--days', type=float, default=30.0, help='最近几天，默认 30')
+  sa.set_defaults(func=cmd_session_age)
+
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
   dp.add_argument('--all', action='store_true', help='全部自研插件')
@@ -1392,6 +1396,17 @@ def build_parser() -> argparse.ArgumentParser:
   tk.set_defaults(func=cmd_tasks)
 
   return parser
+
+
+def cmd_session_age(a: argparse.Namespace) -> int:
+  """会话年龄：转调同目录的 session_age.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('session_age.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), '--days', str(a.days)]
+  return _sp.run(cmd).returncode
 
 
 def cmd_steps(a: argparse.Namespace) -> int:
