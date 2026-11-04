@@ -1332,6 +1332,15 @@ def build_parser() -> argparse.ArgumentParser:
   tl.add_argument('--never', action='store_true', help='只显示零使用清单')
   tl.set_defaults(func=cmd_tools)
 
+  li = sub.add_parser('lint', help='文档排版检查：小标题过长 / 一行多事实 / 长段落 / 超长行（只提示不阻断）')
+  li.add_argument('path', nargs='*', help='要检查的 md 文件（可多个；不给则查 SKILL.md 和决策日志）')
+  li.add_argument('--max-title', type=int, default=8, help='小标题最多几个字，默认 8')
+  li.add_argument('--max-line', type=int, default=120, help='单行最多几个字，默认 120')
+  li.add_argument('--max-para', type=int, default=10, help='连续几行非空算一段，默认 10')
+  li.add_argument('--max-facts', type=int, default=3, help='一行几个「；/、」算多事实，默认 3')
+  li.add_argument('--strict', action='store_true', help='有问题就返回 1（默认只提示，返回 0）')
+  li.set_defaults(func=cmd_lint)
+
   return parser
 
 
@@ -1499,6 +1508,86 @@ def cmd_sessions(a: argparse.Namespace) -> int:
   if r.stderr:
     print(r.stderr, file=sys.stderr, end='')
   return r.returncode
+
+
+def cmd_lint(a: argparse.Namespace) -> int:
+  """文档排版检查：用户 2026-11-03 给的排版五律里可机器判的那几条。
+
+  只提示不阻断：lint 想解决的是「人读不下去」，如果拦下来，
+  就会变成「为了过检查而改文档」，那就反了——同 lab commit 里的自检。
+  """
+  targets = [Path(p) for p in (a.path or [])] or [
+    ROOT / 'dsh-workflow-skill' / 'skills' / 'workflow' / 'SKILL.md',
+    DECISION_LOG,
+  ]
+  total = 0
+  missing = 0
+  for p in targets:
+    if not p.is_file():
+      print(f'[FAIL:参数] 找不到：{p}')
+      missing += 1
+      continue
+    text = p.read_text(encoding='utf-8', errors='replace')
+    lines = text.splitlines()
+    warns: list[tuple[int, str]] = []
+
+    in_code = False
+    for i, ln in enumerate(lines, 1):
+      if ln.strip().startswith('```'):
+        in_code = not in_code
+        continue
+      if in_code:
+        continue
+      m = re.match(r'^(#{1,6})\s+(.*)$', ln)
+      if m:
+        title = m.group(2).strip()
+        # 带编号 / 日期 / 括号的标题是结构性标题，长短是必要的，不算问题
+        structural = bool(re.match(r'^(?:§?[\d.]+|[①-⑳])', title)) or bool(re.search(r'\d{4}-\d{2}', title)) or ('（' in title or '(' in title)
+        if not structural and len(title) > a.max_title:
+          warns.append((i, f'小标题 {len(title)} 字（>{a.max_title}）：{title}'))
+        continue
+      body = ln.strip()
+      if (not body or body.startswith(('|', '-', '*', '>'))
+          or re.match(r'^\d+[.)]\s', body)):
+        continue
+      # 只数分号：顿号「、」多是并列列举，不是多事实
+      n = body.count('；')
+      if n >= a.max_facts:
+        warns.append((i, f'一行 {n} 个「；」，事实挤在一起'))
+      if len(ln) > a.max_line:
+        warns.append((i, f'{len(ln)} 字（>{a.max_line}）'))
+
+    run = 0
+    run_start = 0
+    for i, ln in enumerate(lines, 1):
+      s = ln.strip()
+      if (not s or s.startswith(('#', '-', '*', '|', '>', '```'))
+          or re.match(r'^\d+[.)]\s', s)):
+        run = 0
+        continue
+      if run == 0:
+        run_start = i
+      run += 1
+      if run == a.max_para:
+        warns.append((run_start, f'从 {run_start} 行起连续 {a.max_para} 行无留白（能列表就别写成段落）'))
+        run = 0
+
+    if not warns:
+      print(f'[OK]   {p.name}：{len(lines)} 行，没查出排版问题')
+    else:
+      warns.sort()
+      print(f'[WARN] {p.name}：{len(lines)} 行，{len(warns)} 处读起来费劲')
+      for i, w in warns[:30]:
+        print(f'   第 {i} 行  {w}')
+      if len(warns) > 30:
+        print(f'   …还有 {len(warns) - 30} 处')
+      total += len(warns)
+
+  if missing:
+    return 2
+  if total and a.strict:
+    return 1
+  return 0
 
 
 def main(argv=None) -> int:
