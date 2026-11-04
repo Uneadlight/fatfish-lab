@@ -1350,6 +1350,9 @@ def build_parser() -> argparse.ArgumentParser:
   ss.add_argument('keywords', nargs='*', help='搜索关键词（不给且无 --list/--show 时默认列清单）')
   ss.add_argument('--list', action='store_true', help='列出所有会话')
   ss.add_argument('--show', metavar='ID', help='打印某个会话的原文')
+  ss.add_argument('--context', type=int, metavar='TURN',
+                  help='配合 --show：重建 turn=N 那一刻的完整上下文（消息 + 工具调用与结果）')
+  ss.add_argument('--before', type=int, default=1, help='配合 --context：往前多带几轮用户消息，默认 1')
   ss.add_argument('--head', action='store_true', help='配合 --show，从头而不是从尾')
   ss.add_argument('--all', action='store_true', help='搜索时也匹配我的回复')
   ss.add_argument('--days', type=float, default=0, help='只看最近 N 天')
@@ -1443,6 +1446,16 @@ def build_parser() -> argparse.ArgumentParser:
   vt.add_argument('--max', type=int, default=4, help='每条规则最多展示几处（默认 4）')
   vt.add_argument('--all', action='store_true', help='连开发目录（test/iterate/scripts）一起扫')
   vt.set_defaults(func=cmd_vet)
+
+  lp = sub.add_parser('lsp', help='用语言服务器查定义/引用/符号（治「只能靠 grep 摸黑」）')
+  lp.add_argument('action', choices=['def', 'refs', 'hover', 'symbols'], help='def=跳定义 refs=找引用 hover=类型 symbols=文件符号')
+  lp.add_argument('file', help='源码文件')
+  lp.add_argument('line', nargs='?', type=int, help='行号（1 开始）')
+  lp.add_argument('col', nargs='?', type=int, help='列号（1 开始）')
+  lp.add_argument('--root', help='项目根（默认文件所在目录）')
+  lp.add_argument('--server', help='自定义语言服务器启动命令')
+  lp.add_argument('--timeout', type=float, default=30.0, help='单次请求超时秒数（默认 30）')
+  lp.set_defaults(func=cmd_lsp)
 
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
@@ -1587,6 +1600,28 @@ def cmd_vet(a: argparse.Namespace) -> int:
     cmd += ['--max', str(a.max)]
   if a.all:
     cmd.append('--all')
+  return _sp.run(cmd).returncode
+
+
+def cmd_lsp(a: argparse.Namespace) -> int:
+  """用语言服务器查定义/引用/符号（P11：别再靠 grep 摸黑）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('lsp.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  if a.action in ('def', 'refs', 'hover') and (a.line is None or a.col is None):
+    print(f'[ERROR] lsp {a.action} 需要 <line> <col>（都从 1 开始）', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), a.action, a.file]
+  if a.line is not None and a.col is not None:
+    cmd += [str(a.line), str(a.col)]
+  if a.root:
+    cmd += ['--root', a.root]
+  if a.server:
+    cmd += ['--server', a.server]
+  if a.timeout != 30.0:
+    cmd += ['--timeout', str(a.timeout)]
   return _sp.run(cmd).returncode
 
 
@@ -1874,6 +1909,8 @@ def cmd_sessions(a: argparse.Namespace) -> int:
     args += ['--show', a.show]
     if getattr(a, 'head', False):
       args.append('--head')
+    if getattr(a, 'context', None) is not None:
+      args += ['--context', str(a.context), '--before', str(getattr(a, 'before', 1))]
     args += ['--limit', str(a.limit)]
   elif getattr(a, 'list', False) or not (a.keywords or []):
     args.append('--list')

@@ -264,6 +264,112 @@ def cmd_show(session: str, limit: int = 40, head: bool = False,
     return 0
 
 
+def iter_all_records(path: Path):
+    """流式读原始记录：会话头、权限预设、消息、工具调用与结果。
+
+    和 iter_records 的区别：那个只给消息（建索引用），这个给「那一刻的全现场」。
+    """
+    try:
+        with path.open("rb") as handle:
+            reader = zstandard.ZstdDecompressor().stream_reader(handle)
+            for line in io.TextIOWrapper(reader, encoding="utf-8"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") in ALLOWED_TYPES:
+                    yield record
+    except Exception as exc:  # noqa: BLE001 - 读不了就报，不要静默
+        print(f"  [WARN] {path.parent.name}: {exc}", file=sys.stderr)
+
+
+ALLOWED_TYPES = ("session", "permission/preset", "user/message", "assistant/message",
+                 "tool/call", "tool/result")
+
+
+def find_session_file(session: str) -> Path | None:
+    for p in session_files():
+        sid = p.parent.name.replace("session-", "")
+        if sid == session or sid.startswith(session):
+            return p
+    return None
+
+
+def _result_text(record: dict) -> str:
+    content = ((record.get("data") or {}).get("message") or {}).get("content") or []
+    parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+    return "\n".join(p for p in parts if p)
+
+
+def cmd_context(session: str, turn: int, before: int = 1, max_text: int = 800) -> int:
+    """重建 turn=N 那一刻的完整上下文：消息 + 工具调用与结果。
+
+    系统提示不在会话记录里（harness 每轮现拼），所以能还原的是「消息 + 工具现场」；
+    静态配置能对回来：agentPreset、permission preset、cwd（都在会话头里）。
+    这是 `--at` 的加强版——`--at` 只给那一刻之后的消息，这个给「怎么走到那一刻的」。
+    """
+    path = find_session_file(session)
+    if path is None:
+        print(f"没有这个会话：{session}（先 --list 看有哪些）")
+        return 1
+
+    records = list(iter_all_records(path))
+    head = next((r for r in records if r.get("type") == "session"), {})
+    preset = next((r.get("data", {}).get("preset", "") for r in records
+                   if r.get("type") == "permission/preset"), "")
+    turns = sorted({r["data"]["turn"] for r in records
+                    if r.get("data", {}).get("turn") is not None})
+    if not turns:
+        print(f"会话 {session} 没有 turn 字段，只能用 --show --head 看")
+        return 1
+    if turn not in turns:
+        print(f"会话 {session} 里没有 turn={turn}。有的 turn：{turns[0]}–{turns[-1]}")
+        return 1
+
+    idx = turns.index(turn)
+    start = turns[max(0, idx - before)]
+    picked = [r for r in records
+              if r.get("data", {}).get("turn") is not None
+              and start <= r["data"]["turn"] <= turn]
+    picked.sort(key=lambda r: r.get("seq") or 0)
+
+    names = {r["data"].get("callId"): r["data"].get("name")
+             for r in records if r.get("type") == "tool/call"}
+    print(f"[会话 {session}] turn={turn} 那一刻的上下文（{len(picked)} 条记录，从 turn={start} 起）")
+    print(f"  preset={head.get('agentPreset', '?')} / {preset or '?'} / "
+          f"cwd={head.get('cwd', '?')} / 建于 {fmt_time(head.get('createdAt'))}")
+    print("  （系统提示不在会话记录里，是 harness 每轮现拼的；这里还原消息与工具现场）")
+    print()
+    for r in picked:
+        data = r.get("data") or {}
+        kind = r.get("type")
+        t, s = data.get("turn"), data.get("step")
+        stamp = fmt_time(r.get("time"))
+        if kind == "user/message":
+            body = message_text(r)
+            print(f"── T{t}/S{s} 你 {stamp} ──")
+            print(body[:max_text] + (f"…（原文 {len(body)} 字）" if len(body) > max_text else ""))
+        elif kind == "assistant/message":
+            body = message_text(r) or "（这一步只调了工具，没有文本）"
+            print(f"── T{t}/S{s} 我 {stamp} ──")
+            print(body[:max_text] + (f"…（原文 {len(body)} 字）" if len(body) > max_text else ""))
+        elif kind == "tool/call":
+            args = str(data.get("arguments") or "")
+            print(f"── T{t}/S{s} 工具 {data.get('name')} {stamp} ──")
+            print(args[:300] + ("…" if len(args) > 300 else ""))
+        elif kind == "tool/result":
+            body = _result_text(r)
+            call_id = data.get("callId") or ((data.get("message") or {}).get("toolCallId"))
+            name = names.get(call_id, "?")
+            print(f"── T{t}/S{s} 结果 {name} {stamp} ──")
+            print(body[:max_text] + (f"…（原文 {len(body)} 字）" if len(body) > max_text else ""))
+        print()
+    return 0
+
+
 def cmd_list(days: float = 0, limit: int = 0) -> int:
     """列出所有会话：时间 / id / 消息数 / 大小 / 首句用户消息。
 
@@ -337,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--around", type=int, metavar="TURN", help="with --show, show messages around this turn")
     parser.add_argument("--stats", action="store_true", help="show index status, then exit")
     parser.add_argument("--raw", action="store_true", help="skip the index and scan the zstd files directly (slow but authoritative)")
+    parser.add_argument("--context", type=int, metavar="TURN",
+                        help="with --show, rebuild the full context at this turn (messages + tool calls/results)")
+    parser.add_argument("--before", type=int, default=1,
+                        help="with --context, how many earlier user turns to include (default 1)")
     args = parser.parse_args(argv)
 
     if args.stats:
@@ -346,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(days=args.days, limit=args.limit)
 
     if args.show:
+        if args.context is not None:
+            return cmd_context(args.show, args.context, before=args.before)
         return cmd_show(args.show, limit=args.limit if args.limit != 20 else 40,
                         head=args.head, at=args.at, around=args.around)
 

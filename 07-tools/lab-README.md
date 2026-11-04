@@ -413,7 +413,17 @@ lab sessions 关键词 --days 7              # 搜（--all 也搜我的回复）
 lab sessions --show <id> [--head]         # 读原文（默认末 40 条）
 lab sessions --show <id> --at 12          # 从第 12 轮开始读（"回到那一刻"）
 lab sessions --show <id> --around 12      # 看第 12 轮前后各一半
+lab sessions --show <id> --context 12     # 重建第 12 轮那一刻的全现场（消息+工具+结果）
+lab sessions --show <id> --context 12 --before 3   # 往前多带 3 轮用户消息
 ```
+
+`--context` 与 `--at` 的区别：`--at` 只给你那一刻**之后**的消息；`--context` 给你**怎么走到那一刻的**——
+用户消息、我的回复、每一次 `tool/call`（工具名 + 参数）、每一次 `tool/result`（截断到 800 字），
+外加会话头的 `agentPreset` / permission preset / cwd / 创建时间。
+
+**它还原不了什么（写在输出第一行，不靠我记着）**：系统提示不在会话记录里——harness 每轮现拼，
+只能按 `agentPreset` 对回静态配置；动态注入的部分（记忆注入、skills 列表）无法还原。
+所以它是「消息 + 工具现场」的完整重建，不是「当时的模型输入」的逐字重建。
 
 实测：30 会话 / 1,367 条消息，索引重建 1.9 秒，之后搜 0.01 秒。
 
@@ -570,6 +580,26 @@ lab vet <目录> --max 10                # 每条规则多展示几处
 验证过它抓得到真东西：造了一个假插件（postinstall 跑 `steal.js`、`exec` 跑命令、读
 `~/.dsh/memory/memories.json`、`eval`、往 `http://203.0.113.9/upload` POST），
 4 类 HIGH + 3 类 MED 全中。
+
+### `lab lsp` —— 用语言服务器查定义/引用（治 P11「只能靠 grep 摸黑」）
+
+```bash
+lab lsp symbols tools/lab/claims.py       # 文件里有哪些类/函数/变量（含子符号）
+lab lsp def tools/lab/claims.py 127 44    # 第 127 行第 44 列那个符号在哪定义
+lab lsp refs tools/lab/claims.py 64 5     # 谁引用了它
+lab lsp hover tools/lab/claims.py 127 44  # 类型/签名
+```
+
+**它不是自己写的解析器**：接现成的 LSP 服务——默认 `pyright-langserver --stdio`
+（`npm i -g pyright` 装好即可；换语言只要 `--server` 换启动命令）。协议是
+JSON-RPC over stdio，客户端纯标准库，不引入任何依赖。
+
+空值不是错误：`[空]` 表示语言服务器给不出答案（动态代码、`**kwargs` 传参、
+字符串当属性名），不是「这个符号不存在」。
+
+**踩坑（卡了 3 分钟）**：`subprocess.PIPE` 上的 `read(n)` 会阻塞到读满 n 字节——LSP
+响应只有几百字节，`read(4096)` 就永远等下去，表现成「initialize 超时 120 秒」。必须用
+`read1(n)`（缓冲区有数据就立即返回）。
 
 ## 两个硬坑（都踩过）
 
