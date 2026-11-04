@@ -1402,6 +1402,10 @@ def build_parser() -> argparse.ArgumentParser:
   co.add_argument('--recent', type=int, default=0, help='只看最近 N 次请求')
   co.add_argument('--session', nargs='?', const='', default=None,
                   help='只看某个会话（不带值 = 日志里最新的会话），回答「这一轮花了多少」')
+  co.add_argument('--official', action='store_true',
+                  help='从官方用量页抓真数（需要 Edge 开 9222 并已登录）')
+  co.add_argument('--port', type=int, default=9222, help='CDP 端口，默认 9222')
+  co.add_argument('--tab', type=int, default=None, help='用第几个 page 标签（默认自动找用量页）')
   co.add_argument('--json', action='store_true', help='输出 JSON')
   co.set_defaults(func=cmd_cost)
 
@@ -1439,6 +1443,16 @@ def build_parser() -> argparse.ArgumentParser:
   cd.add_argument('--wait', type=float, default=15.0, help='goto 等 readyState 的上限秒数')
   cd.add_argument('--await-promise', action='store_true', help='eval 时等 Promise 解析')
   cd.set_defaults(func=cmd_cdp)
+
+  dk = sub.add_parser('desktop', help='桌面输入：鼠标移动/点击、发按键（Win32，默认 dry-run，要 --yes）')
+  dk.add_argument('action', choices=['pos', 'move', 'click', 'key'])
+  dk.add_argument('x', nargs='?')
+  dk.add_argument('y', nargs='?')
+  dk.add_argument('combo', nargs='?')
+  dk.add_argument('--button', default='left', choices=['left', 'right', 'middle'])
+  dk.add_argument('--double', action='store_true', help='双击')
+  dk.add_argument('--yes', action='store_true', help='真执行（默认只打印要做什么）')
+  dk.set_defaults(func=cmd_desktop)
 
   vt = sub.add_parser('vet', help='装插件前扫一遍代码：它要联网/读写什么/执不执行命令')
   vt.add_argument('path', help='插件目录')
@@ -1677,6 +1691,11 @@ def cmd_cost(a: argparse.Namespace) -> int:
     cmd.append('--session')
     if a.session:
       cmd.append(a.session)
+  if getattr(a, 'official', False):
+    cmd.append('--official')
+    cmd += ['--port', str(a.port)]
+    if a.tab is not None:
+      cmd += ['--tab', str(a.tab)]
   if a.json:
     cmd.append('--json')
   return _sp.run(cmd).returncode
@@ -1714,6 +1733,29 @@ def cmd_cdp(a: argparse.Namespace) -> int:
   else:
     print(f'[ERROR] 未知动作 {a.action}', file=sys.stderr)
     return 2
+  return _sp.run(cmd).returncode
+
+
+def cmd_desktop(a: argparse.Namespace) -> int:
+  """桌面输入：转调同目录的 desktop.py（P3 的另一半：真鼠标/键盘）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('desktop.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), a.action]
+  if a.action == 'move':
+    cmd += [str(a.x), str(a.y)]
+  elif a.action == 'click':
+    if a.x is not None and a.y is not None:
+      cmd += [str(a.x), str(a.y)]
+    cmd += ['--button', a.button]
+    if a.double:
+      cmd.append('--double')
+  elif a.action == 'key':
+    cmd.append(a.combo or a.x or '')
+  if a.yes:
+    cmd.append('--yes')
   return _sp.run(cmd).returncode
 
 

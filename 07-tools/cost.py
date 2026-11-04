@@ -113,14 +113,113 @@ def report_session(rows: list[dict], sess: str) -> None:
             print(f'  比这个会话之前的平均请求（{avg:,.0f} tok）{word} {last["in"] / avg:.2f} 倍')
 
 
+USAGE_URL = 'https://platform.deepseek.com/usage'
+
+
+def _fetch_usage_text(port: int = 9222, tab: int | None = None) -> tuple[str, str]:
+    """通过 CDP 读官方用量页的正文。返回 (文本, 页面 url)。
+
+    bili.log 只能给估算（绝对值偏低约 2.4 倍），官方页面才是真数。
+    这条链路复用 lab cdp：不新造浏览器客户端，也不碰登录态。
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import cdp  # noqa: PLC0415 - 只有 --official 才需要，别让 --hours 也依赖它
+
+    pages = cdp.list_pages(port)
+    if not pages:
+        raise RuntimeError('9222 端口上没有 page 标签（Edge 没开 --remote-debugging-port=9222？）')
+    idx = tab
+    if idx is None:
+        for i, p in enumerate(pages):
+            if 'platform.deepseek.com' in (p.get('url') or ''):
+                idx = i
+                break
+        else:
+            raise RuntimeError('打开的标签里没有 platform.deepseek.com（先 lab cdp goto '
+                               'https://platform.deepseek.com/usage）')
+    page = cdp.pick_page(port, idx)
+    ws = cdp.WS(page['webSocketDebuggerUrl'])
+    try:
+        text = cdp.do_eval(ws, 'document.body.innerText', False)
+    finally:
+        ws.sock.close()
+    return text or '', page.get('url') or ''
+
+
+def parse_usage(text: str) -> dict:
+    """从用量页正文里抠数字。页面是「标签\\n值\\n单位」的排版，按标签找第一个值。"""
+    patterns = {
+        # 页面里「累计消费金额」排在「消费金额」前面，不加负向后顾会抓错成累计值
+        'today_cost': r'(?<!累计)消费金额\s*¥\s*([\d,]+(?:\.\d+)?)',
+        'requests': r'API 请求次数\s*([\d,]+)',
+        'tokens': r'Tokens\s*([\d,]+)',
+        'balance': r'充值余额[\s\S]{0,80}?¥\s*([\d,]+(?:\.\d+)?)',
+        'total_cost': r'累计消费金额\s*¥\s*([\d,]+(?:\.\d+)?)',
+    }
+    out: dict = {}
+    for k, pat in patterns.items():
+        m = re.search(pat, text)
+        if not m:
+            continue
+        v = m.group(1).replace(',', '')
+        out[k] = int(v) if k in ('requests', 'tokens') else float(v)
+    return out
+
+
+def report_official(port: int = 9222, tab: int | None = None) -> None:
+    """官方真数 vs 本地估算——回答「到底花了多少、我的尺子偏了多少」。
+
+    为什么要这个视图：`--hours` 的数字偏低 2.4 倍，但那个 2.4 是会变的
+    （它取决于 bili 的前缀字节命中率与官方计费 token 命中率差多少）。
+    每次都从官方页面读一遍真值，比值自己就校准了，不用记死一个数。
+    """
+    try:
+        text, url = _fetch_usage_text(port, tab)
+    except Exception as exc:  # noqa: BLE001 - 连不上就是连不上，原因照原样报
+        print(f'[FAIL] 读不到官方用量页: {exc}')
+        print('      需要：Edge 以 --remote-debugging-port=9222 启动，已登录并打开用量页')
+        sys.exit(2)
+    off = parse_usage(text)
+    if 'today_cost' not in off:
+        print('[FAIL] 页面里没找到「消费金额」——可能没登录，或页面还没加载完（先 lab cdp goto 刷新）')
+        sys.exit(3)
+
+    today0 = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = load(today0)
+    loc_in = sum(r['in'] for r in rows)
+    loc_cost = sum(cost_of(r['in'], r['cached'], r['peak']) for r in rows)
+
+    print(f'[COST] 官方用量（实时读自 {url}）')
+    print(f'  今日消费 ¥{off.get("today_cost", 0):,.2f} · 请求 {off.get("requests", 0):,} 次 · '
+          f'Tokens {off.get("tokens", 0):,}')
+    if 'balance' in off:
+        print(f'  余额 ¥{off["balance"]:,.2f} · 累计消费 ¥{off.get("total_cost", 0):,.2f}')
+    print()
+    print(f'  本地估算（今天 00:00 起）：{len(rows)} 次 · input {loc_in:,} tok ≈ ¥{loc_cost:.4f}')
+    if loc_cost > 0 and off.get('today_cost'):
+        print(f'  官方 / 本地 = {off["today_cost"] / loc_cost:.2f} 倍 → 看比值校准，不用记死 2.4')
+    if off.get('tokens') and loc_in:
+        print(f'  官方 Tokens / 本地 input = {off["tokens"] / loc_in:.2f} 倍（官方含 output 与计费口径差）')
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='按时间窗口算 token 成本（数据源 bili.log）')
     ap.add_argument('--hours', type=float, default=24, help='看最近几小时，默认 24')
     ap.add_argument('--recent', type=int, default=0, help='只看最近 N 次请求')
     ap.add_argument('--session', nargs='?', const='', default=None,
                     help='只看某个会话（不带值 = 日志里最新的会话）')
+    ap.add_argument('--official', action='store_true',
+                    help='从官方用量页抓真数（需要 Edge 开 9222 并已登录）')
+    ap.add_argument('--port', type=int, default=9222, help='CDP 端口，默认 9222')
+    ap.add_argument('--tab', type=int, default=None, help='用第几个 page 标签（默认自动找用量页）')
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args()
+
+    if a.official:
+        report_official(a.port, a.tab)
+        return
 
     # 会话模式不限时间窗口：一个长会话可能横跨好几个小时，按 --hours 切会把前半段吃掉。
     if a.session is not None:

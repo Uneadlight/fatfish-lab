@@ -450,13 +450,16 @@ lab cost --recent 6         # 只看最近 6 次请求
 lab cost --session          # 只看当前会话（= 日志里最新的 [sess=...]）
 lab cost --session <id>     # 只看指定会话
 lab cost --session --json
+lab cost --official         # 官方真数：读已开的平台用量页，跟本地估算并列
 ```
 
 数据源是 bili 日志里的 `[acp-usage]` 行（`input=` / `cached=`），**只有 input 没有 output**（output 约占 0.3%，误差可接受）。
 
 **`--session` 解决的是什么**：`--hours` 回答不了「刚才这一轮多少钱」，而会话内相邻请求的 input 倍数能直接看出上下文炸没炸——同一个会话里第 1 次和第 50 次请求成本能差 10 倍以上。判断方式看 `×N` 那列（相对上一次的 input 倍数，input 决定成本），最后一行给「比本会话平均请求贵几倍」。
 
-**边界**：绝对值**低于官方账单约 2.4 倍**（bili 算"前缀字节命中"、官方算"计费 token 命中"）——看相对分布和趋势可信，看绝对值不可信；真要报预算用 `lab balance` 的余额差值。
+**`--official` 解决的是什么（2026-11-04 加）**：本地估算的绝对值到底偏多少，不该靠记忆里一个固定的「2.4 倍」——那个数会变。`--official` 用 `lab cdp` 读已经开着的 `https://platform.deepseek.com/usage` 页面 DOM，把官方今日消费/请求数/Tokens/余额/累计抓下来，跟本地估算并列打出「官方 / 本地 = X 倍」。**需要 Edge 以 `--remote-debugging-port=9222` 启动并已登录**。实测 2026-11-04 23:13：官方 ¥22.80 / 1,524 次 / 466,919,387 tok，本地估 ¥17.21 / 1,486 次，比值 **1.32**（不是 2.4——所以那个固定数字确实过期了）。
+
+**边界**：`--official` 读的是页面渲染出来的数（平台自己说「数据可能有 5 分钟延迟」），不是账单 API；页面没登录或没加载完时报 `[FAIL]` 退出 2/3，不会瞎猜。不开浏览器时仍只能用本地估算，看相对分布和趋势可信、看绝对值不可信。
 
 ### `lab encoding` / `lab claims` / `lab config`
 
@@ -551,6 +554,34 @@ lab cdp tabs --port 9333              # 连别的调试端口
 实测（2026-11-04，Edge 155 开在 DeepSeek 开放平台）：`tabs` 正确列出；`eval document.title` → `DeepSeek 开放平台`；
 `click body` → `[OK] 点击了 <BODY>`；`click #__no_such_element__` → `[FAIL]` 退出码 4；
 `shot` 出 143,458 B PNG，页面内容完整可读。
+
+### `lab desktop` —— 桌面上的鼠标和键盘（P3 的另一半，2026-11-04 加）
+
+```powershell
+lab desktop pos                        # 当前鼠标坐标 + 屏幕尺寸
+lab desktop move 500 300               # 预览：会把鼠标移到哪（不动）
+lab desktop move 500 300 --yes         # 真移
+lab desktop click 500 300              # 预览：会在哪点什么键
+lab desktop click 500 300 --yes        # 真点
+lab desktop click --button right --yes # 在当前位置点右键
+lab desktop key ctrl+s                 # 预览：会发什么键（VK 码）
+lab desktop key ctrl+s --yes           # 真发
+```
+
+**默认 dry-run**：所有会改系统状态的动作（move / click / key）不加 `--yes` 只打印「要做什么、当前在哪」。
+理由不是保守，是桌面坐标会漂、窗口会动，点错的后果不可逆——预览一行成本是零，点错一次可能是关掉没存的文件。
+
+**实现**：`desktop.py` 用 ctypes 调 `user32`——`GetCursorPos` / `SetCursorPos` / `mouse_event` / `keybd_event`，纯标准库。
+组合键先按顺序按下、再逆序抬起（顺序反了组合就不成立）；单字符键走 `ord(upper)`，其余查 `VK` 表
+（enter/tab/esc/方向键/F1–F12/ctrl/alt/shift/win）；不认识的键名报 `[FAIL]` 退出码 2。
+
+**边界**：不做拖拽（要 按下-移动-抬起 三段）、不隐藏或激活窗口、不 sleep 等动画；坐标是物理像素，
+多显示器时是虚拟屏幕坐标。它和 `lab cdp` 的分工：**网页优先用 cdp**（走 DOM，稳、有选择器、不怕窗口移动），
+只有真桌面窗口（资源管理器/IDE/非 Chromium 应用）才用 desktop。
+
+实测（2026-11-04 23:25）：`pos` → `(335, 77) · 屏幕 1707×960`；`move 100 100` / `click 500 500` / `key ctrl+s`
+的 dry-run 打印全对；`desktop.move(*cursor_pos())` 真调 `SetCursorPos` 返回 `True`（验证 API 可用，不产生可见移动）；
+`key ctrl+notakey` → `[FAIL] 不认识的键: notakey` 退出码 2。
 
 ### `lab vet` —— 装插件前扫一遍它要什么（治 P13「外来东西信不过」）
 
