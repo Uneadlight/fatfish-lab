@@ -443,6 +443,37 @@ lab config                               # DSH 配置备份（白名单，不含
 
 `encoding` 抄 `dsh-encoding` 的判据：BOM → 奇数位零字节占比 → 严格 UTF-8 校验 → 高位字节占比 → gbk / binary。**它保住 BOM 信息**（不把 utf-16le 猜成 utf-8），恢复时给 `{ok, text, note}`；含 U+FFFD 时 `ok=False` 并明说"更早的误解码已销毁，救不回来"。回归 9/9。
 
+### `lab unattended` —— 人不在场也把活干完（治 P8「我不在场就断线」）
+
+```powershell
+lab unattended "把 X 做完" --timeout 600
+lab unattended --task-file task.md --name review-deps --timeout 1800
+lab unattended --list
+lab unattended --last
+lab unattended --show 20261104-220202-probe-preset2
+lab unattended --dry "先看看会跑什么"
+```
+
+- **不是裸 headless**：`dsh --profile headless` 每次工具调用都会弹审批框，没有应答方就永远卡住等人点（2026-11-01 让用户连点十多回）。
+- 正解是**只覆盖 `approval`**（`policy: never`），`sandbox-policy` 不动——**写入仍被限制在 workspace-write**，比直接开 `DSH_PERMISSION_MODE=danger-full-access` 安全一个量级。
+- 任务文本走 stdin（`dsh ... -`），绕开命令行引号/中文编码问题；`Popen.wait(timeout=)` 到点 `taskkill /F /T` 杀整棵树（`p.kill()` 只杀直接子进程，node 会留下来继续烧 API），实测超时后 node 进程数 before=1 / after=1 无残留。
+- 产物：`D:\work\自进化\unattended\<run_id>\` 里的 `approval-never.yml` / `task.md` / `stdout.log` / `stderr.log` / `meta.json`；`journal.jsonl` 记 `unattended.start` / `.done` / `.failed` / `.timeout`。
+- **必须同时 patch `permission-presets`**：它的默认表只有 `read-only+ask` / `workspace-write+ask` / `danger-full-access+never` 三组，拼 `workspace-write+never` 会 derive 出 `custom` 并在构造时抛错、整个插件不激活（stderr `dsh: warning: 1 entry did not activate` + `permission ... composed sandbox and approval defaults match no preset`）。patch 里要显式加 `unattended` preset 并设 `defaultPreset: unattended`。
+- 并发目录锁：`<out_root>/.runlock/owner.json` 存 pid/run_id/at；陈旧判定**只认 pid 是否还活着**，判活用 `tasklist`——**Windows 上 `os.kill(pid, 0)` 走 TerminateProcess，会真的把进程杀掉**，不能用。五条路径已测：首拿 / 并发拒 / 释放 / 陈旧锁自动清 / 坏 owner 拒删。
+- 退出码：0 跑完 rc=0 / 1 跑完 rc≠0 / 2 超时被杀 / 3 用途错误 / 4 环境缺失 / 5 已有运行占锁。
+- **边界：只保证进程跑完 + 输出落盘，不保证任务做成。** headless 的 rc=0 只说明模型认为它答完了，验收还是要看 stdout 和文件现场；不自动重试（防重复副作用）。
+
+### `lab session-age` / `lab rework`
+
+```powershell
+lab session-age            # 这个对话还能撑多久、每轮比新对话贵几倍
+lab session-age --detail   # 逐轮看
+lab rework --days 3        # 从会话原文捞「用户否定我上一句」的时刻
+```
+
+`session-age`：成本跟轮数是**平方关系**（第 N 轮要把前面全部重发一遍），阈值 8 倍时建议开新对话，不靠感觉。
+`rework`：`lab correction` 靠我自觉记，实际被纠正三次、一条没记 → 换个入口，**从会话原文里把否定句捞出来**，只列时刻、不判对错（判断是我下）。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF

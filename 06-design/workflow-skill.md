@@ -239,6 +239,7 @@ metadata:
 | 做图 | archify 技能 |
 | **连续跑多条、要保状态** | **`terminal_open` → 多次 `terminal_send` → `terminal_close`**。**触发信号：我要连着跑 ≥3 条命令，而且它们共享状态（同一个 `cd`、激活过的 venv、设过的变量、git 操作上下文）。** 2026-11-03 实测：`pwsh` 被调了 2,932 次全是新进程，`terminal_*` 零使用；开一个持久终端连发两条，`变量=persist-ok`、`目录=~/.dsh`、`进程=13988` 全保持。**反例：只看输出、不需要状态时仍用 `pwsh`**——持久终端的回显会被 PowerShell prompt 函数刷得很花 |
 | 计划任务 | schtasks（注意查 LastTaskResult） |
+| **要人不在场也把活干完** | **`lab unattended "<任务>" --timeout 600`**（长任务用 `--task-file`）。**触发信号：跑一个不该占着当前对话的长任务、写定时任务脚本、或用户说「等会儿」「你不在也行」。** 它只把 `approval` 覆盖成 `never`，**sandbox 仍 workspace-write**（比直接开 `DSH_PERMISSION_MODE=danger-full-access` 安全得多）；任务文本走 stdin（`-` 参数）绕开命令行引号地狱；到点 `taskkill /F /T` 杀整棵树（`p.kill()` 只杀直接子进程，node 会留下来继续烧 API）；输出 + `meta.json` 落 `D:\work\自进化\unattended\<run_id>\`，journal 记 start/done/timeout。**别用裸 `dsh --profile headless`**：没有审批应答方，每次工具调用都卡死等人点（2026-11-01 实测让用户连点十多回）。退出码 0=跑完 rc0 / 1=rc非0 / 2=超时被杀 / 3=用途错误 / 4=环境缺失 / 5=已有运行占锁。**边界：只保证进程跑完 + 输出落盘，不保证任务真的做成**——headless 的 rc=0 只说明模型认为它答完了，验收还是要看 stdout 和文件现场 |
 
 ## 6. 踩坑记录（每踩一坑，当场写 memory_save）
 

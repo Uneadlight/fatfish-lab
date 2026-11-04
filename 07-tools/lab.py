@@ -1398,6 +1398,19 @@ def build_parser() -> argparse.ArgumentParser:
   tk.add_argument('--json', action='store_true', help='输出 JSON')
   tk.set_defaults(func=cmd_tasks)
 
+  un = sub.add_parser('unattended', help='无人值守跑 headless 任务（只关审批，沙箱仍是 workspace-write）')
+  un.add_argument('task', nargs='?', help='任务文本（与 --task-file 二选一）')
+  un.add_argument('--task-file', help='从文件读任务文本')
+  un.add_argument('--timeout', type=int, default=600, help='硬超时秒数（默认 600）')
+  un.add_argument('--name', help='运行名（决定目录名）')
+  un.add_argument('--out', default=str(ROOT / '自进化' / 'unattended'), help='输出根目录')
+  un.add_argument('--cwd', default=str(ROOT), help='headless 的工作目录（决定沙箱可写范围）')
+  un.add_argument('--dry', action='store_true', help='只打印将执行的命令')
+  un.add_argument('--list', action='store_true', help='列出历史运行')
+  un.add_argument('--show', metavar='RUN_ID', help='看某一次运行')
+  un.add_argument('--last', action='store_true', help='看最近一次运行')
+  un.set_defaults(func=cmd_unattended)
+
   return parser
 
 
@@ -1447,6 +1460,38 @@ def cmd_tasks(a: argparse.Namespace) -> int:
   cmd = [sys.executable, str(script)]
   if getattr(a, 'json', False):
     cmd.append('--json')
+  return _sp.run(cmd).returncode
+
+
+def cmd_unattended(a: argparse.Namespace) -> int:
+  """无人值守跑 headless：转调同目录的 unattended.py（治 P8）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('unattended.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if a.list:
+    cmd.append('--list')
+  elif a.show:
+    cmd += ['--show', a.show]
+  elif a.last:
+    cmd.append('--last')
+  else:
+    if a.task:
+      cmd.append(a.task)
+    if a.task_file:
+      cmd += ['--task-file', a.task_file]
+    if a.timeout != 600:
+      cmd += ['--timeout', str(a.timeout)]
+    if a.name:
+      cmd += ['--name', a.name]
+    if a.out != str(ROOT / '自进化' / 'unattended'):
+      cmd += ['--out', a.out]
+    if a.cwd != str(ROOT):
+      cmd += ['--cwd', a.cwd]
+    if a.dry:
+      cmd.append('--dry')
   return _sp.run(cmd).returncode
 
 
