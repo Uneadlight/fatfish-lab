@@ -80,7 +80,7 @@ def skill_lab_refs() -> dict[str, list[tuple[str, int, str]]]:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             for m in RE_LAB_CMD.finditer(line):
-                out.setdefault(m.group(1), []).append((doc.name, i, line))
+                out.setdefault(m.group(1), []).append((_doc_label(doc), i, line))
     return out
 
 
@@ -88,6 +88,20 @@ def skill_lab_refs() -> dict[str, list[tuple[str, int, str]]]:
 SOFT_MARKERS = ('→ 不写死', '已改', '曾经', '旧版', '历史', '如果一周内',
                 '建议', '将来', '以后做', '还没做', '未做', '做成工具',
                 '抄**', '抄：', '装**', '造**')  # 后四个＝「打算这么写」，不是在断言已经有了
+
+
+def _doc_label(p: Path) -> str:
+    """文档标签：优先用相对 ROOT 的路径。
+
+    以前直接报 doc.name，结果 `架构文档/README.md` 和 `tools/lab/README.md`
+    都显示成「README.md」，报漂移时根本不知道该改哪个（2026-11-04 实测：
+    报「README.md:68 写的 25 个子命令」，我打开 tools/lab/README.md 的 L68
+    发现是「8 类凭证扫描」，白查一轮）。
+    """
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
 
 
 def check_lab_refs() -> list[dict]:
@@ -129,7 +143,7 @@ def check_paths() -> list[dict]:
                         'kind': '路径不存在',
                         'claim': f'`{p}`',
                         'actual': '磁盘上没有',
-                        'where': f'{doc.name}:{i}',
+                        'where': f'{_doc_label(doc)}:{i}',
                     })
     return bad
 
@@ -159,7 +173,7 @@ def check_counts() -> list[dict]:
                         'soft': soft,
                         'claim': f'「{n} 个子命令」',
                         'actual': f'实际 {nsub} 个',
-                        'where': f'{doc.name}:{i}',
+                        'where': f'{_doc_label(doc)}:{i}',
                     })
             for m2 in RE_NBUNDLE.finditer(line):
                 n2 = int(m2.group(1))
@@ -170,7 +184,7 @@ def check_counts() -> list[dict]:
                         'soft': soft,
                         'claim': f'「{n2} 个 bundle/插件」',
                         'actual': f'profile 里实际 {nbundle} 个',
-                        'where': f'{doc.name}:{i}',
+                        'where': f'{_doc_label(doc)}:{i}',
                     })
     return bad
 
@@ -194,7 +208,7 @@ def check_cross_docs() -> list[dict]:
                             'kind': '文档互引断了',
                             'claim': f'引用了 `{name}`',
                             'actual': '三处目录都找不到',
-                            'where': f'{doc.name}:{i}',
+                            'where': f'{_doc_label(doc)}:{i}',
                         })
     return bad
 
