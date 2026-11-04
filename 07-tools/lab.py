@@ -1387,6 +1387,10 @@ def build_parser() -> argparse.ArgumentParser:
   dp.add_argument('--check', action='store_true', help='只比，不同步')
   dp.set_defaults(func=cmd_deploy)
 
+  tk = sub.add_parser('tasks', help='计划任务体检：状态 / 上次结果 / 下次时间 / 电池空闲网络条件')
+  tk.add_argument('--json', action='store_true', help='输出 JSON')
+  tk.set_defaults(func=cmd_tasks)
+
   return parser
 
 
@@ -1401,6 +1405,19 @@ def cmd_steps(a: argparse.Namespace) -> int:
   if a.verify:
     cmd.append('--verify')
   if a.json:
+    cmd.append('--json')
+  return _sp.run(cmd).returncode
+
+
+def cmd_tasks(a: argparse.Namespace) -> int:
+  """计划任务体检：转调同目录的 tasks.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('tasks.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if getattr(a, 'json', False):
     cmd.append('--json')
   return _sp.run(cmd).returncode
 
