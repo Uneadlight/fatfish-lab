@@ -14,6 +14,7 @@ output 约占总 token 的 0.3%（今天实测 1513.93M input / 4.99M output）�
 import argparse
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -115,12 +116,19 @@ def report_session(rows: list[dict], sess: str) -> None:
 
 USAGE_URL = 'https://platform.deepseek.com/usage'
 
+# 页面渲染完成的判据：真的出现「消费金额 ¥数字」（骨架里的纯文字标题不算）
+_READY_RE = re.compile(r'(?<!累计)消费金额\s*¥\s*[\d,]')
 
-def _fetch_usage_text(port: int = 9222, tab: int | None = None) -> tuple[str, str]:
+
+def _fetch_usage_text(port: int = 9222, tab: int | None = None,
+                      reload: bool = True) -> tuple[str, str]:
     """通过 CDP 读官方用量页的正文。返回 (文本, 页面 url)。
 
     bili.log 只能给估算（绝对值偏低约 2.4 倍），官方页面才是真数。
     这条链路复用 lab cdp：不新造浏览器客户端，也不碰登录态。
+
+    默认先 reload 再读：用量页不会自己轮询，不刷新就只能读到上次渲染的值。
+    reload 后页面要重新请求接口，所以等到 readyState=complete 再多等 0.3 秒。
     """
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
@@ -142,7 +150,26 @@ def _fetch_usage_text(port: int = 9222, tab: int | None = None) -> tuple[str, st
     page = cdp.pick_page(port, idx)
     ws = cdp.WS(page['webSocketDebuggerUrl'])
     try:
-        text = cdp.do_eval(ws, 'document.body.innerText', False)
+        if reload:
+            try:
+                cdp.do_eval(ws, 'location.reload()', False)
+            except Exception:  # noqa: BLE001 - 导航会销毁执行上下文，这条不等返回值
+                pass
+            # 坑：reload 是异步的，紧接着读 readyState 会读到**旧文档**的 complete，
+            # 误以为加载完了。而且「消费金额」四个字在骨架/图表标题里也会出现，
+            # 用关键词判断会早退拿到半截 DOM。所以等到**真的出现数字**为止。
+            time.sleep(1.5)
+            text = ''
+            for _ in range(30):
+                try:
+                    text = cdp.do_eval(ws, 'document.body.innerText', False) or ''
+                except Exception:  # noqa: BLE001 - 导航中 evaluate 会抛，继续等
+                    text = ''
+                if _READY_RE.search(text):
+                    break
+                time.sleep(0.5)
+        else:
+            text = cdp.do_eval(ws, 'document.body.innerText', False)
     finally:
         ws.sock.close()
     return text or '', page.get('url') or ''
@@ -168,15 +195,19 @@ def parse_usage(text: str) -> dict:
     return out
 
 
-def report_official(port: int = 9222, tab: int | None = None) -> None:
+def report_official(port: int = 9222, tab: int | None = None,
+                    reload: bool = True) -> None:
     """官方真数 vs 本地估算——回答「到底花了多少、我的尺子偏了多少」。
 
     为什么要这个视图：`--hours` 的数字偏低 2.4 倍，但那个 2.4 是会变的
     （它取决于 bili 的前缀字节命中率与官方计费 token 命中率差多少）。
     每次都从官方页面读一遍真值，比值自己就校准了，不用记死一个数。
+
+    默认先让页面 reload 再读：用量页不会自己轮询，不刷新拿到的是上次渲染的旧值。
+    官方页面自己写着「数据可能有 5 分钟延迟」，所以再新也最多新到 5 分钟前。
     """
     try:
-        text, url = _fetch_usage_text(port, tab)
+        text, url = _fetch_usage_text(port, tab, reload=reload)
     except Exception as exc:  # noqa: BLE001 - 连不上就是连不上，原因照原样报
         print(f'[FAIL] 读不到官方用量页: {exc}')
         print('      需要：Edge 以 --remote-debugging-port=9222 启动，已登录并打开用量页')
@@ -212,13 +243,15 @@ def main() -> None:
                     help='只看某个会话（不带值 = 日志里最新的会话）')
     ap.add_argument('--official', action='store_true',
                     help='从官方用量页抓真数（需要 Edge 开 9222 并已登录）')
+    ap.add_argument('--no-reload', dest='no_reload', action='store_true',
+                    help='--official 时不刷新页面，直接读当前 DOM（快，但可能是旧值）')
     ap.add_argument('--port', type=int, default=9222, help='CDP 端口，默认 9222')
     ap.add_argument('--tab', type=int, default=None, help='用第几个 page 标签（默认自动找用量页）')
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args()
 
     if a.official:
-        report_official(a.port, a.tab)
+        report_official(a.port, a.tab, reload=not a.no_reload)
         return
 
     # 会话模式不限时间窗口：一个长会话可能横跨好几个小时，按 --hours 切会把前半段吃掉。

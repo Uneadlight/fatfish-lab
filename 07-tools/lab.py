@@ -1404,6 +1404,8 @@ def build_parser() -> argparse.ArgumentParser:
                   help='只看某个会话（不带值 = 日志里最新的会话），回答「这一轮花了多少」')
   co.add_argument('--official', action='store_true',
                   help='从官方用量页抓真数（需要 Edge 开 9222 并已登录）')
+  co.add_argument('--no-reload', dest='no_reload', action='store_true',
+                  help='--official 时不刷新页面，直接读当前 DOM（快，但可能是旧值）')
   co.add_argument('--port', type=int, default=9222, help='CDP 端口，默认 9222')
   co.add_argument('--tab', type=int, default=None, help='用第几个 page 标签（默认自动找用量页）')
   co.add_argument('--json', action='store_true', help='输出 JSON')
@@ -1696,6 +1698,8 @@ def cmd_cost(a: argparse.Namespace) -> int:
     cmd += ['--port', str(a.port)]
     if a.tab is not None:
       cmd += ['--tab', str(a.tab)]
+    if getattr(a, 'no_reload', False):
+      cmd.append('--no-reload')
   if a.json:
     cmd.append('--json')
   return _sp.run(cmd).returncode
