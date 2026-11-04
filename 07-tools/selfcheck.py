@@ -199,11 +199,61 @@ def check_cross_docs() -> list[dict]:
     return bad
 
 
+CAP_DOC = ARCH / '我的能力清单.md'
+README_LAB = ROOT / 'tools' / 'lab' / 'README.md'
+
+
+def check_local_plugins() -> list[dict]:
+    """@local/* 的插件：能力清单里提到就必须装着（自己的东西不该漏装）。"""
+    bad = []
+    try:
+        deps = (json.loads(read(PROFILE_PKG)).get('dependencies') or {})
+    except Exception:
+        return bad
+    installed = {n.split('/')[-1] for n in deps}
+    text = read(CAP_DOC)
+    if not text:
+        return bad
+    seen = set()
+    for m in re.finditer(r'@local/([\w-]+)', text):
+        name = m.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        if name not in installed:
+            bad.append({
+                'kind': '@local 插件没装',
+                'claim': f'`@local/{name}`',
+                'actual': 'profile dependencies 里没有',
+                'where': CAP_DOC.name,
+            })
+    return bad
+
+
+def check_readme_coverage() -> list[dict]:
+    """lab 的每个子命令，README 里至少提到一次（加了命令没写文档 = 下次又忘）。"""
+    bad = []
+    text = read(README_LAB)
+    if not text:
+        return bad
+    for name in sorted(lab_subcommands()):
+        if f'`{name}`' not in text and f'lab {name}' not in text:
+            bad.append({
+                'kind': 'README 没写这个子命令',
+                'claim': f'`lab {name}`',
+                'actual': 'tools/lab/README.md 里没有条目',
+                'where': 'tools/lab/README.md',
+            })
+    return bad
+
+
 GROUPS = [
     ('lab 子命令引用', check_lab_refs),
     ('绝对路径引用', check_paths),
     ('计数断言', check_counts),
     ('文档互引', check_cross_docs),
+    ('@local 插件装机核对', check_local_plugins),
+    ('README 覆盖 lab 子命令', check_readme_coverage),
 ]
 
 
