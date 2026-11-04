@@ -179,6 +179,26 @@ def _load_plan(plan_path: Path) -> list[tuple[Path, str]]:
   return pairs
 
 
+def _auto_lab_entries(pairs: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
+  """tools/lab 下的脚本和数据文件自动进发布清单（P12：加工具不必再手写一行）。
+
+  跳过 `_` 开头（一次性/内部修 BOM 之类）和 `test_` 开头（测试）。
+  清单里已写过的按 resolve() 去重，先手写也不会重复发布。
+  """
+  base = Path(__file__).resolve().parent
+  covered = {p.resolve() for p, _ in pairs}
+  extra: list[tuple[Path, str]] = []
+  for p in sorted(base.iterdir()):
+    if not p.is_file() or p.suffix not in {'.py', '.json'}:
+      continue
+    if p.name.startswith('_') or p.name.startswith('test_'):
+      continue
+    if p.resolve() in covered:
+      continue
+    extra.append((p, f'07-tools/{p.name}'))
+  return extra
+
+
 def _scrub_text(text: str) -> str:
   for pattern, repl in SCRUB_RULES:
     text = re.sub(pattern, lambda _m, r=repl: r, text)
@@ -194,6 +214,12 @@ def cmd_stage(a: argparse.Namespace) -> int:
     pairs = _load_plan(plan)
   except Exception as exc:  # noqa: BLE001 - 清单读不了就是读不了，原因直接报
     return _fail(2, f'读发布清单失败: {exc}')
+  auto = [] if getattr(a, 'no_auto', False) else _auto_lab_entries(pairs)
+  if auto:
+    print(f'[AUTO] lab 里新增的 {len(auto)} 个（清单没写，自动补）：')
+    for src, rel in auto:
+      print(f'  {src.name} -> {rel}')
+    pairs = pairs + auto
   if not pairs:
     return _fail(1, f'清单里没有条目: {plan}')
 
@@ -1200,6 +1226,8 @@ def build_parser() -> argparse.ArgumentParser:
   st.add_argument('--repo', help='目标仓库目录，默认 repos/dafeiyu-lab')
   st.add_argument('--dry', action='store_true', help='只打印不拷贝')
   st.add_argument('--skip-scan', dest='skip_scan', action='store_true', help='跳过安全扫描')
+  st.add_argument('--no-auto', dest='no_auto', action='store_true',
+                  help='不自动补 tools/lab 下新增的脚本（默认会自动补）')
   st.set_defaults(func=cmd_stage)
 
   cm = sub.add_parser('commit', help='提交 + 推送（中文安全 / token 不进 config / 只重试临时性失败 / 回读校验）')
