@@ -542,6 +542,35 @@ lab cdp tabs --port 9333              # 连别的调试端口
 `click body` → `[OK] 点击了 <BODY>`；`click #__no_such_element__` → `[FAIL]` 退出码 4；
 `shot` 出 143,458 B PNG，页面内容完整可读。
 
+### `lab vet` —— 装插件前扫一遍它要什么（治 P13「外来东西信不过」）
+
+```powershell
+lab vet D:\work\dsh-memory        # 扫一个插件目录
+lab vet <目录> --all                   # 连 test/iterate/scripts 一起扫
+lab vet <目录> --json                  # 给机器读
+lab vet <目录> --max 10                # 每条规则多展示几处
+```
+
+**它不判「安全/不安全」**——我没有这个能力，判了也是假的。它只把「这个插件申请了什么能力」
+摆到眼前，让装之前有一个三秒钟的判断机会。装第三方包之前先跑一遍，比装完看它跑了什么便宜得多。
+
+两级规则：
+
+- **HIGH（值得停下来看一眼）**：执行外部进程（`child_process`/`execSync`）、动态执行（`eval`/`new Function`）、
+  读会话/记忆/凭据（`.dsh/memory`、`.dsh/sessions`、`hosts.yml`、`github-token`、`credentials`）、
+  安装时执行脚本（`pre/postinstall`）、超长硬编码 base64（400+ 字符）。
+- **MED（大多数正常插件也有，数量说明体量）**：联网（fetch/axios/https.request/WebSocket）、写/删文件、读环境变量。
+
+默认跳过开发目录（`test`/`iterate`/`scripts`/`examples`/`docs` 等），只看会随包发布的代码；
+`--all` 才全扫。单文件 >2 MB、单行 >2000 字符按构建产物处理（长行只跑 base64 规则）。
+
+**边界**：纯静态正则匹配。拼接出来的调用（`ev`+`al`）、压缩代码、动态 `require` 都可能漏。
+它挡的是「随手装一个来路不明的东西」这个习惯，不是定向攻击。
+
+验证过它抓得到真东西：造了一个假插件（postinstall 跑 `steal.js`、`exec` 跑命令、读
+`~/.dsh/memory/memories.json`、`eval`、往 `http://203.0.113.9/upload` POST），
+4 类 HIGH + 3 类 MED 全中。
+
 ## 两个硬坑（都踩过）
 
 ### 1. `.cmd` 必须是 CRLF

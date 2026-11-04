@@ -1437,6 +1437,13 @@ def build_parser() -> argparse.ArgumentParser:
   cd.add_argument('--await-promise', action='store_true', help='eval 时等 Promise 解析')
   cd.set_defaults(func=cmd_cdp)
 
+  vt = sub.add_parser('vet', help='装插件前扫一遍代码：它要联网/读写什么/执不执行命令')
+  vt.add_argument('path', help='插件目录')
+  vt.add_argument('--json', action='store_true', help='输出 JSON')
+  vt.add_argument('--max', type=int, default=4, help='每条规则最多展示几处（默认 4）')
+  vt.add_argument('--all', action='store_true', help='连开发目录（test/iterate/scripts）一起扫')
+  vt.set_defaults(func=cmd_vet)
+
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
   dp.add_argument('--all', action='store_true', help='全部自研插件')
@@ -1563,6 +1570,23 @@ def cmd_unattended(a: argparse.Namespace) -> int:
       cmd += ['--cwd', a.cwd]
     if a.dry:
       cmd.append('--dry')
+  return _sp.run(cmd).returncode
+
+
+def cmd_vet(a: argparse.Namespace) -> int:
+  """装插件前扫一遍代码：联网/写文件/执行进程/读记忆凭据（P13 信任边界）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('vet.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), a.path]
+  if a.json:
+    cmd.append('--json')
+  if a.max != 4:
+    cmd += ['--max', str(a.max)]
+  if a.all:
+    cmd.append('--all')
   return _sp.run(cmd).returncode
 
 
