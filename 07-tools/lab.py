@@ -1385,6 +1385,9 @@ def build_parser() -> argparse.ArgumentParser:
   sa.add_argument('--days', type=float, default=30.0, help='最近几天，默认 30')
   sa.set_defaults(func=cmd_session_age)
 
+  rw = sub.add_parser('rework', help='返工审计：从会话原文捞「用户否定我上一句」的时刻，看我在哪儿被纠正')
+  rw.set_defaults(func=cmd_rework)
+
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
   dp.add_argument('--all', action='store_true', help='全部自研插件')
@@ -1396,6 +1399,16 @@ def build_parser() -> argparse.ArgumentParser:
   tk.set_defaults(func=cmd_tasks)
 
   return parser
+
+
+def cmd_rework(a: argparse.Namespace) -> int:
+  """返工审计：转调同目录的 rework.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('rework.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  return _sp.run([sys.executable, str(script)]).returncode
 
 
 def cmd_session_age(a: argparse.Namespace) -> int:
