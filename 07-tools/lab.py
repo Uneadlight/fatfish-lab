@@ -1431,6 +1431,16 @@ def build_parser() -> argparse.ArgumentParser:
   rw = sub.add_parser('rework', help='返工审计：从会话原文捞「用户否定我上一句」的时刻，看我在哪儿被纠正')
   rw.set_defaults(func=cmd_rework)
 
+  rc = sub.add_parser('recall', help='开工第一步：按任务自动提词并检索记忆库（0 命中退出码 1）')
+  rc.add_argument('task', nargs='*', help='任务原话（建议整句贴）')
+  rc.add_argument('--terms', nargs='+', help='手动指定检索词，跳过自动提词')
+  rc.add_argument('--top', type=int, default=8, help='最多显示几条（默认 8）')
+  rc.add_argument('--min', type=float, default=1.0, help='最低分（默认 1.0）')
+  rc.add_argument('--json', action='store_true')
+  rc.add_argument('--audit', action='store_true', help='看最近有没有在用（读 .recall.log）')
+  rc.add_argument('--days', type=int, default=7, help='--audit 的时间窗口')
+  rc.set_defaults(func=cmd_recall)
+
   rv = sub.add_parser('review', help='复盘：完成声明证据率 + 被否定次数，写回复盘状态（P5 的触发点）')
   rv.set_defaults(func=cmd_review)
 
@@ -1519,6 +1529,27 @@ def cmd_review(a: argparse.Namespace) -> int:
     print(f'[ERROR] 找不到 {script}', file=sys.stderr)
     return 2
   return _sp.run([sys.executable, str(script)]).returncode
+
+
+def cmd_recall(a: argparse.Namespace) -> int:
+  """开工第一步：转调同目录的 recall.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('recall.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script)]
+  if a.audit:
+    cmd += ['--audit', '--days', str(a.days)]
+  else:
+    if a.task:
+      cmd += list(a.task)
+    if a.terms:
+      cmd += ['--terms'] + list(a.terms)
+    cmd += ['--top', str(a.top), '--min', str(a.min)]
+    if a.json:
+      cmd.append('--json')
+  return _sp.run(cmd).returncode
 
 
 def cmd_rework(a: argparse.Namespace) -> int:

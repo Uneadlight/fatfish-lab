@@ -248,8 +248,12 @@ def cmd_deploy(names: list[str], check: bool) -> int:
                 need_restart.append((name, h))
             continue
 
-        # 同步前先备份 profile 那一份
-        bak = d.parent / f'{d.name}.bak-{time.strftime("%Y%m%d-%H%M%S")}'
+        # 同步前先备份 profile 那一份。备份必须放在 备份/deploy/ 下，不能放在插件同目录——
+        # 否则 `D:\work\dsh-xxx.bak-<时间>` 会被 env_doctor 当成「未登记的自研插件」报警
+        # （2026-11-04 实测，两次同步留下两个 .bak 目录，巡检连着报了两条 WARN）。
+        bak_root = ROOT / '备份' / 'deploy'
+        bak_root.mkdir(parents=True, exist_ok=True)
+        bak = bak_root / f'{d.name}-{time.strftime("%Y%m%d-%H%M%S")}'
         try:
             shutil.copytree(d, bak)
             print(f'   备份 → {bak.name}')
