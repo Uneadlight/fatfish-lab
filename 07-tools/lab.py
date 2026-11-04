@@ -718,6 +718,7 @@ def cmd_commit(a: argparse.Namespace) -> int:
 
     if a.no_push:
       print('[OK] --no-push，跳过推送')
+      _review_remind()
       return 0
 
     # ── 3. 推送（只对临时性失败重试）─────────────────────────
@@ -745,6 +746,7 @@ def cmd_commit(a: argparse.Namespace) -> int:
         print('[OK] push 成功')
         if out:
           print('  ' + out.splitlines()[-1])
+        _review_remind()
         return 0
       last = out[:400]
       if not any(p in out.lower() for p in TRANSIENT):
@@ -1390,6 +1392,9 @@ def build_parser() -> argparse.ArgumentParser:
   rw = sub.add_parser('rework', help='返工审计：从会话原文捞「用户否定我上一句」的时刻，看我在哪儿被纠正')
   rw.set_defaults(func=cmd_rework)
 
+  rv = sub.add_parser('review', help='复盘：完成声明证据率 + 被否定次数，写回复盘状态（P5 的触发点）')
+  rv.set_defaults(func=cmd_review)
+
   dp = sub.add_parser('deploy', help='改完自研插件，同步到 profile 并验证（软链的自动跳过）')
   dp.add_argument('names', nargs='*', help='插件名，如 dsh-evolve 或 @local/dsh-evolve')
   dp.add_argument('--all', action='store_true', help='全部自研插件')
@@ -1414,6 +1419,28 @@ def build_parser() -> argparse.ArgumentParser:
   un.set_defaults(func=cmd_unattended)
 
   return parser
+
+
+def _review_remind() -> None:
+  """打一行复盘状态。只读 state 文件，不扫会话——挂在 commit 后面必须是 0 成本的。"""
+  try:
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+      sys.path.insert(0, str(here))
+    import review
+    review.remind()
+  except Exception as e:
+    print(f'[WARN] 复盘提醒失败（不影响主流程）：{type(e).__name__}: {e}')
+
+
+def cmd_review(a: argparse.Namespace) -> int:
+  """复盘：转调同目录的 review.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('review.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  return _sp.run([sys.executable, str(script)]).returncode
 
 
 def cmd_rework(a: argparse.Namespace) -> int:

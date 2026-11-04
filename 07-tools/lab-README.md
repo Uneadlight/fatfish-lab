@@ -479,12 +479,23 @@ lab unattended --dry "先看看会跑什么"
 
 ```powershell
 lab session-age            # 这个对话还能撑多久、每轮比新对话贵几倍
-lab session-age --detail   # 逐轮看
-lab rework --days 3        # 从会话原文捞「用户否定我上一句」的时刻
+lab session-age --days 7   # 只看最近 7 天的会话（默认 30）
+lab rework                 # 从会话原文捞「用户否定我上一句」的时刻（固定最近 3 天）
 ```
 
 `session-age`：成本跟轮数是**平方关系**（第 N 轮要把前面全部重发一遍），阈值 8 倍时建议开新对话，不靠感觉。
 `rework`：`lab correction` 靠我自觉记，实际被纠正三次、一条没记 → 换个入口，**从会话原文里把否定句捞出来**，只列时刻、不判对错（判断是我下）。
+
+### `lab review` —— 复盘触发点（治 P5「没有自动复盘的触发点」）
+
+```powershell
+lab review                 # 扫最近 3 天：完成声明证据率 + 被否定几次，写回复盘状态
+```
+
+P5 的根因不是「看不到历史」（时间轴 100% 完整），是**没有触发点**——只有想起来才会回头看。
+所以提醒挂在两件每天一定会发生的事上：`lab commit` 成功后打一行 `[复盘]` 状态；`lab session-age` 超阈值时同样提示。
+**commit 里只读一个 JSON，绝不扫会话**（`scan(3)` 要 3 秒，会拖慢每次提交）；要数字的时候跑 `lab review`。
+状态文件：`D:\work\自进化\复盘状态.json`（`last_review` / `claims` / `backed` / `negatives` / `scanned`）；超过 3 天没复盘，提醒会带 `> 3 天` 字样。
 
 ## 两个硬坑（都踩过）
 
