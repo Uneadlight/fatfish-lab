@@ -1286,6 +1286,8 @@ def build_parser() -> argparse.ArgumentParser:
                   help='扫会话记录里我的回复（形式完成真正发生的地方）')
   cl.add_argument('--days', type=int, default=7, help='--chat 时看最近几天，默认 7')
   cl.add_argument('--json', action='store_true', help='JSON 输出')
+  cl.add_argument('--selftest', action='store_true',
+                  help='用人工标注回归判据本身（改 claims.py 后必跑）')
   cl.set_defaults(func=cmd_claims)
 
   fa = sub.add_parser('fact', help='事实核对：把我话里的数字/路径/版本号/行号逐个验证')
@@ -1641,6 +1643,8 @@ def cmd_claims(a: argparse.Namespace) -> int:
     args += ['--days', str(getattr(a, 'days', 7))]
   if getattr(a, 'json', False):
     args.append('--json')
+  if getattr(a, 'selftest', False):
+    args.append('--selftest')
   r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
   if r.stdout:
     print(r.stdout, end='')
