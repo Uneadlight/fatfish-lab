@@ -1353,6 +1353,12 @@ def build_parser() -> argparse.ArgumentParser:
   sk.add_argument('--json', action='store_true', help='输出 JSON')
   sk.set_defaults(func=cmd_skill)
 
+  tr = sub.add_parser('tier', help='开工前报数：这活有多少、配什么档、手边有什么能用的')
+  tr.add_argument('task', help='任务描述（一句话）')
+  tr.add_argument('--no-assets', action='store_true', help='跳过资产扫描（快 1 秒，但没推荐）')
+  tr.add_argument('--json', action='store_true', help='输出 JSON')
+  tr.set_defaults(func=cmd_tier)
+
   return parser
 
 
@@ -1374,6 +1380,21 @@ def cmd_assets(a: argparse.Namespace) -> int:
     cmd += ['--name', a.name]
   if a.budget != 4.0:
     cmd += ['--budget', str(a.budget)]
+  return _sp.run(cmd).returncode
+
+
+def cmd_tier(a: argparse.Namespace) -> int:
+  """开工前报数：转调同目录的 tier.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('tier.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), a.task]
+  if getattr(a, 'no_assets', False):
+    cmd.append('--no-assets')
+  if getattr(a, 'json', False):
+    cmd.append('--json')
   return _sp.run(cmd).returncode
 
 
