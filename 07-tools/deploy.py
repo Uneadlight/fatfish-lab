@@ -38,6 +38,9 @@ SELF_BUILT = [
     'dsh-memory',
     'dsh-stickers',
     'dsh-chat-background',
+    # 2026-11-05 加：env_doctor 抓到它源码 0.2.0 / profile 0.1.0——
+    # v0.2 的「两个事件都挂 + 去重」从 11-03 写完就没落地过，因为它不在这个表里。
+    'dsh-self-guard',
 ]
 
 # 不同步的东西：体积大 + 不影响运行
@@ -85,6 +88,10 @@ def tree_hash(p: Path) -> dict[str, str]:
         if any(part in skip_dirs for part in rel.parts):
             continue
         if f.suffix in ('.pyc', '.log') or '.bak' in f.name:
+            continue
+        # 测试文件不进 profile：package.json 的 files 字段也不含它们，
+        # 让 compare 报「仅源码有 test.mjs」是假警报（2026-11-05 dsh-self-guard 实测）。
+        if f.name.startswith('test.') or f.name.startswith('test_') or '.test.' in f.name:
             continue
         try:
             out[str(rel).replace('\\', '/')] = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
