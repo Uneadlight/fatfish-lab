@@ -189,7 +189,7 @@ def _auto_lab_entries(pairs: list[tuple[Path, str]]) -> list[tuple[Path, str]]:
   covered = {p.resolve() for p, _ in pairs}
   extra: list[tuple[Path, str]] = []
   for p in sorted(base.iterdir()):
-    if not p.is_file() or p.suffix not in {'.py', '.json'}:
+    if not p.is_file() or p.suffix not in {'.py', '.json', '.ps1'}:
       continue
     if p.name.startswith('_') or p.name.startswith('test_'):
       continue
