@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(r'D:\work')
@@ -68,6 +69,29 @@ def journal(action: str, **fields) -> None:
       handle.write(json.dumps(row, ensure_ascii=False) + '\n')
   except OSError as exc:
     print(f'[WARN] journal 写入失败（不影响本次执行）: {exc}')
+
+
+CALL_LOG = Path.home() / '.dsh' / 'lab-calls.log'
+
+
+def _record_call(a: argparse.Namespace) -> None:
+  """记一笔 lab 子命令调用，给 `lab tools` 统计用（2026-11-05 加）。
+
+  为什么不从 DSH 的 tool 事件统计：`lab xxx` 是 pwsh 里的一条命令，
+  会话记录里只看得到「pwsh 被调用」，看不到具体哪个 lab 子命令——
+  用它量「工具用了没」等于用错的尺子量。写失败不能影响命令本身。
+  """
+  try:
+    fn = getattr(a, 'func', None)
+    name = getattr(fn, '__name__', '?')
+    if name.startswith('cmd_'):
+      name = name[4:]
+    CALL_LOG.parent.mkdir(parents=True, exist_ok=True)
+    row = {'at': datetime.now().isoformat(timespec='seconds'), 'cmd': name}
+    with CALL_LOG.open('a', encoding='utf-8', newline='\n') as handle:
+      handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+  except Exception:  # noqa: BLE001 - 统计失败绝不能影响命令本身，也不能藏
+    pass
 
 
 def _fail(code: int, msg: str) -> int:
@@ -2092,6 +2116,7 @@ def cmd_lint(a: argparse.Namespace) -> int:
 
 def main(argv=None) -> int:
   args = build_parser().parse_args(argv)
+  _record_call(args)
   return args.func(args)
 
 

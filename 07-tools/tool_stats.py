@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -84,6 +85,44 @@ def collect() -> tuple[Counter[str], int]:
     return counter, sessions
 
 
+LAB_CALLS = Path.home() / ".dsh" / "lab-calls.log"
+LAB_PY = Path(__file__).with_name("lab.py")
+
+
+def lab_commands() -> list[str]:
+    """从 lab.py 的注册块里抓所有**一级**子命令名——不维护第二份清单。
+
+    `sub.add_parser` 也用于二级子命令（`lab issue list` 之类），
+    所以只认 build_parser 里缩进正好两格的那种。
+    """
+    try:
+        src = LAB_PY.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return sorted(set(re.findall(r"^  \w+ = sub\.add_parser\(\s*['\"]([\w-]+)['\"]", src, re.MULTILINE)))
+
+
+def lab_call_stats() -> tuple[Counter[str], str, str]:
+    """读 ~/.dsh/lab-calls.log：每个子命令被调了几次、从哪天记到哪天。"""
+    counter: Counter[str] = Counter()
+    first = last = ""
+    if not LAB_CALLS.exists():
+        return counter, first, last
+    for line in LAB_CALLS.read_text(encoding="utf-8", errors="replace").split("\n"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        counter[row.get("cmd") or "?"] += 1
+        at = row.get("at") or ""
+        if at:
+            first = first or at
+            last = at
+    return counter, first, last
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=0, help="只显示前 N 个（0 = 全部）")
@@ -112,6 +151,21 @@ def main() -> int:
     if unknown:
         print(f"=== 清单外但用过的（{len(unknown)} 个，清单该更新了）===")
         print(f"  {', '.join(sorted(unknown))}")
+
+    # lab 子命令：DSH 的 tool 事件里只有「pwsh 被调用」，看不到具体子命令，
+    # 所以 lab.py 自己在 main() 里记一笔到 lab-calls.log，这里读它。
+    lab_counter, lab_first, lab_last = lab_call_stats()
+    all_subs = lab_commands()
+    if all_subs:
+        used_subs = [n for n in all_subs if lab_counter.get(n, 0)]
+        dead_subs = [n for n in all_subs if not lab_counter.get(n, 0)]
+        span = f"{lab_first[:10]} ~ {lab_last[:10]}" if lab_first else "还没有记录"
+        print(f"\n=== lab 子命令调用（{span}）===")
+        print(f"  调用过 {len(used_subs)}/{len(all_subs)} 个，共 {sum(lab_counter.values())} 次")
+        for name, count in lab_counter.most_common(args.top or 10):
+            print(f"  {name:<20} {count:>4}")
+        if dead_subs:
+            print(f"  从没调用过（{len(dead_subs)} 个）：{', '.join(dead_subs)}")
     return 0
 
 
