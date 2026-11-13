@@ -30,10 +30,12 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(r'D:\work')
+ROOT = Path(r'E:/DS公作区')
 DECISION_LOG = ROOT / '自进化' / '决策日志.md'
 ASAR = Path(r'D:\DeepSeek Harness\resources\app.asar')
-DEFAULT_REPO = ROOT / 'repos' / 'dafeiyu-lab'  # 本地目录名仍是 dafeiyu-lab，远端仓库名是 fatfish-lab
+DEFAULT_REPO = ROOT  # 2026-11-13 修：默认提交目标是工作区根，不再是 repos/dafeiyu-lab
+# 之前默认指向作品集仓库，导致日常 `lab commit` 不传 --repo 时永远报「没有改动、无事可做」——
+# 它看的是另一个仓库。要在作品集仓库提交，显式 --repo repos/dafeiyu-lab。
 DEFAULT_PLAN = ROOT / 'tools' / 'lab' / 'release-plan.txt'
 
 REQUIRED_SECTIONS = ('做了什么', '为什么', '取舍', '教训')
@@ -143,10 +145,15 @@ def cmd_log(a: argparse.Namespace) -> int:
   else:
     return _fail(1, '需要 --body-file 或 --stdin')
 
-  body = body.strip()
+  body = body.lstrip('\ufeff').strip()   # PS 5.1 的 Out-File -Encoding utf8 会带 BOM
   missing = [s for s in REQUIRED_SECTIONS if not _has_section(body, s)]
   if missing:
     print(f'[WARN] 缺小标题: {", ".join(missing)}（写 **做了什么** 或 ## 做了什么 都算）')
+
+  # body 里的 ## 要降一级：它们是条目内的小标题，不是新条目。
+  # 2026-11-07 修：以前原样写入，一天之内就攒出 60+ 个假条目
+  #（「做了什么」「为什么」「验收」「根因」全被当成了同级条目）。
+  body = re.sub(r'(?m)^##\s+', '### ', body)
 
   entry = f'\n## {a.mark} {a.title}\n\n{body}\n'
   if a.dry:
@@ -626,12 +633,12 @@ def cmd_commit(a: argparse.Namespace) -> int:
   import subprocess
   import tempfile
 
-  git = Path(r'D:\work\tools\git\cmd\git.exe')
+  git = Path(r'E:/DS公作区\tools\git\cmd\git.exe')
   if not git.exists():
     print(f'[FAIL:能力缺失] 找不到便携版 git：{git}')
     return 2
 
-  repo = Path(a.repo).expanduser().resolve() if a.repo else ROOT / 'repos' / 'dafeiyu-lab'
+  repo = Path(a.repo).expanduser().resolve() if a.repo else DEFAULT_REPO
   if not (repo / '.git').exists():
     print(f'[FAIL:用途错误] 不是 git 仓库：{repo}')
     return 2
@@ -656,9 +663,35 @@ def cmd_commit(a: argparse.Namespace) -> int:
     return r
 
   try:
+    # ── 0. 提交前自检（2026-11-11 用户 m00291 校准）──────────
+    # 原来 selfcheck 全靠「想起来才跑」；挂到 commit 前，让「机制抓疏漏」每次必跑。
+    # 有漂移就中止；改机制的过程中必然漂移（需要先提交再 update-fingerprint），
+    # 这时用 --skip-selfcheck 留一个明确的逃生门，而不是悄悄绕过。
+    if not getattr(a, 'skip_selfcheck', False):
+      labpy = Path(__file__).resolve()
+      sc = subprocess.run(
+        (sys.executable, str(labpy), 'selfcheck'),
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        cwd=str(labpy.parent.parent.parent))
+      out = (sc.stdout or '') + (sc.stderr or '')
+      mo = re.search(r'共\s*(\d+)\s*处漂移', out)
+      drift = int(mo.group(1)) if mo else 0
+      if drift:
+        print(f'[FAIL:自检未过] selfcheck 有 {drift} 处漂移，已中止提交：')
+        for ln in out.splitlines():
+          if '处漂移' in ln and '0 处' not in ln:
+            print('  ' + ln.strip())
+        print('  → 先修漂移；确认要带漂移提交，加 --skip-selfcheck')
+        return 2
+      print('[selfcheck] 全绿')
+
     # ── 1. 暂存 ──────────────────────────────────────────────
     if a.files:
-      run('add', '--', *a.files)
+      # 用 -A：路径既可以是文件也可以是目录，目录下的新增/修改/删除一并暂存。
+      # 2026-11-13 修：原来用 `add --`，传目录时 git 报
+      # `fatal: pathspec 'xxx' did not match any files`（未跟踪目录不在 index 里，
+      # add 认不出来）；-A 会扫描工作区把该路径下的新文件也纳入。
+      run('add', '-A', '--', *a.files)
     elif a.all:
       run('add', '-A')
     else:
@@ -702,16 +735,36 @@ def cmd_commit(a: argparse.Namespace) -> int:
         print('[WARN] 没有改动，也判断不出有没有未推送（当前分支没有上游）；不猜，退出')
         return 1
     elif untracked:
-      # 暂存区有东西、但还有未跟踪文件——这是最危险的情形：看着提交成功了，
-      # 实际上少了新写的文件。默认模式下直接拦下，要求显式说明。
-      print(f'[FAIL:用途错误] 已暂存 {len(staged)} 个文件，但还有 {len(untracked)} 个未跟踪文件会漏掉：')
-      for u in untracked[:8]:
-        print(f'    {u}')
-      if len(untracked) > 8:
-        print(f'    …还有 {len(untracked) - 8} 个')
-      print('  → 如果它们该进这次提交，用 `--all`；如果只提交其中几个，用 `--files <路径…>`')
-      print('  → 如果它们本来就不该进（构建产物等），把它们加进 .gitignore')
-      return 2
+      # 暂存区有东西、但还有未跟踪文件——默认模式下直接拦下（看着提交成功了，
+      # 实际少了新写的文件）。但用户显式用 --files 列了要提交什么，就等于声明了
+      # 意图，这时只警告不阻断（2026-11-11 用户 m00291 校准：误报比漏报更烦）。
+      if a.files:
+        # 显式列了要提交什么，但仍要把未跟踪文件摆到眼前——误报烦，漏报更烦。
+        # 2026-11-11 用户 m00474 校准：降级为警告可以，但要保留「再看一眼」的阻力。
+        print(f'[WARN] 还有 {len(untracked)} 个未跟踪文件没进本次提交：')
+        for u in untracked[:20]:
+          print(f'    {u}')
+        if len(untracked) > 20:
+          print(f'    …还有 {len(untracked) - 20} 个')
+        if not a.dry and not a.allow_untracked:
+          if sys.stdin.isatty():
+            ans = input('  这些是未跟踪文件，确认按 --files 列表提交？(y/N) ').strip().lower()
+            if ans not in ('y', 'yes'):
+              print('  → 已取消。确认要提交请重跑并加 --allow-untracked')
+              return 2
+          else:
+            print('  → 非交互环境：确认按这个列表提交，加 --allow-untracked 重跑')
+            return 2
+        print('  → 按 --files 显式列表继续')
+      else:
+        print(f'[FAIL:用途错误] 已暂存 {len(staged)} 个文件，但还有 {len(untracked)} 个未跟踪文件会漏掉：')
+        for u in untracked[:8]:
+          print(f'    {u}')
+        if len(untracked) > 8:
+          print(f'    …还有 {len(untracked) - 8} 个')
+        print('  → 如果它们该进这次提交，用 `--all`；如果只提交其中几个，用 `--files <路径…>`')
+        print('  → 如果它们本来就不该进（构建产物等），把它们加进 .gitignore')
+        return 2
 
     if a.dry:
       print(f'[DRY] 仓库：{repo}')
@@ -765,10 +818,31 @@ def cmd_commit(a: argparse.Namespace) -> int:
         print('  实际：' + got.splitlines()[0])
         return 1
       print('[OK] commit ' + run('log', '-1', '--oneline').stdout.strip())
+      # 提醒挂在 commit 上而不是 push 上：本地仓库（E:/DS公作区）没有 remote，
+      # push 本来就会失败，但「这次提交没记日志」跟推没推成功无关。2026-11-07 实测踩到。
+      _review_remind(repo)
 
-    if a.no_push:
-      print('[OK] --no-push，跳过推送')
-      _review_remind()
+    if not staged:
+      # 只推送旧提交（没有新 commit）：也要提醒一次——旧提交可能也没记
+      _review_remind(repo)
+
+    # 2026-11-11 用户 m00291 校准：没配 remote 时不再以 push 失败收场——
+    # 先把提交打成 bundle（本地快照，防丢），再说清「没配远端、没推」。
+    # bundle 是快照不是同步，所以每次走到「没推」这条路上都重打一次。
+    has_remote = bool(run('remote').stdout.strip())
+    if a.no_push or not has_remote:
+      why = '--no-push' if a.no_push else '没有配置 remote'
+      head = run('rev-parse', '--short', 'HEAD').stdout.strip()
+      branch = run('rev-parse', '--abbrev-ref', 'HEAD').stdout.strip() or 'HEAD'
+      bdir = Path(repo) / 'backup' / 'git'
+      bout = bdir / f'{head}.bundle'
+      try:
+        bdir.mkdir(parents=True, exist_ok=True)
+        bout.unlink(missing_ok=True)
+        run('bundle', 'create', str(bout), branch)
+        print(f'[OK] {why}，跳过推送；已 bundle 备份 {bout}（{bout.stat().st_size:,} B）')
+      except RuntimeError as exc:
+        print(f'[WARN] {why}，跳过推送；但 bundle 备份失败：{exc}')
       return 0
 
     # ── 3. 推送（只对临时性失败重试）─────────────────────────
@@ -796,7 +870,6 @@ def cmd_commit(a: argparse.Namespace) -> int:
         print('[OK] push 成功')
         if out:
           print('  ' + out.splitlines()[-1])
-        _review_remind()
         return 0
       last = out[:400]
       if not any(p in out.lower() for p in TRANSIENT):
@@ -1173,6 +1246,49 @@ def cmd_config(a: argparse.Namespace) -> int:
 
 OCR_PY = ROOT / 'tools' / 'ocr-venv312' / 'Scripts' / 'python.exe'
 OCR_RUN = ROOT / 'tools' / 'lab' / 'ocr_run.py'
+I23D_PY = ROOT / 'tools' / 'i23d' / '.venv' / 'Scripts' / 'python.exe'
+I23D_RUN = ROOT / 'tools' / 'lab' / 'i23d.py'
+
+
+def cmd_i23d(a: argparse.Namespace) -> int:
+  """单图生成 3D 模型（腾讯 TokenHub 混元 HY-3D）。
+
+  转发到 i23d 的 venv，因为转 GLB 要 trimesh；本函数的 lab 进程只有 runtime python。
+  """
+  if not I23D_PY.exists():
+    return _fail(2, f'找不到 i23d 解释器：{I23D_PY}')
+  if not I23D_RUN.exists():
+    return _fail(2, f'找不到 i23d.py：{I23D_RUN}')
+
+  from pathlib import Path as _P
+
+  img = _P(a.image)
+  if not img.exists():
+    return _fail(2, f'图片不存在：{img}')
+
+  cmd = [
+    str(I23D_PY), str(I23D_RUN),
+    '--image', str(img),
+    '--model', a.model,
+    '--faces', str(a.faces),
+    '--out', a.out,
+    '--timeout', str(a.timeout),
+    '--interval', str(a.interval),
+  ]
+  if a.json:
+    cmd.append('--json')
+  try:
+    proc = subprocess.run(cmd, capture_output=True, timeout=a.timeout + 180, check=False)  # noqa: S603
+  except subprocess.TimeoutExpired:
+    return _fail(3, f'i23d 超时（{a.timeout + 180}s）：{img}')
+
+  sys.stdout.write(proc.stdout.decode('utf-8', errors='replace'))
+  if proc.returncode != 0:
+    err = proc.stderr.decode('utf-8', errors='replace').strip()[-600:]
+    if err:
+      print(err, file=sys.stderr)
+    return _fail(4, f'i23d 失败（exit={proc.returncode}）')
+  return 0
 
 
 def cmd_ocr(a: argparse.Namespace) -> int:
@@ -1247,7 +1363,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   st = sub.add_parser('stage', help='按清单把产出拷进发布仓库（脱敏 + 安全扫描）')
   st.add_argument('--plan', help='发布清单，默认 tools/lab/release-plan.txt')
-  st.add_argument('--repo', help='目标仓库目录，默认 repos/dafeiyu-lab')
+  st.add_argument('--repo', help='目标仓库目录，默认工作区根 E:/DS公作区')
   st.add_argument('--dry', action='store_true', help='只打印不拷贝')
   st.add_argument('--skip-scan', dest='skip_scan', action='store_true', help='跳过安全扫描')
   st.add_argument('--no-auto', dest='no_auto', action='store_true',
@@ -1257,12 +1373,16 @@ def build_parser() -> argparse.ArgumentParser:
   cm = sub.add_parser('commit', help='提交 + 推送（中文安全 / token 不进 config / 只重试临时性失败 / 回读校验）')
   cm.add_argument('-m', '--message', help='提交说明；多行用 --msg-file 更稳')
   cm.add_argument('--msg-file', dest='msg_file', help='从 UTF-8 文件读提交说明')
-  cm.add_argument('--repo', help='仓库目录，默认 repos/dafeiyu-lab')
+  cm.add_argument('--repo', help='仓库目录，默认工作区根 E:/DS公作区')
   cm.add_argument('--files', nargs='*', help='只暂存这些路径')
   cm.add_argument('--all', action='store_true', help='暂存全部改动（含未跟踪的新文件）')
   cm.add_argument('--no-push', dest='no_push', action='store_true', help='只提交不推送')
   cm.add_argument('--no-lint', dest='no_lint', action='store_true', help='跳过 message 排版检查（默认只提示不阻断）')
   cm.add_argument('--dry', action='store_true', help='只打印要做什么，不动仓库')
+  cm.add_argument('--skip-selfcheck', dest='skip_selfcheck', action='store_true',
+                  help='跳过提交前的 selfcheck 漂移检查（默认有漂移就中止）')
+  cm.add_argument('--allow-untracked', dest='allow_untracked', action='store_true',
+                  help='显式 --files 且仓库里还有未跟踪文件时，跳过二次确认（非交互环境必须加）')
   cm.set_defaults(func=cmd_commit)
 
   jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
@@ -1291,6 +1411,18 @@ def build_parser() -> argparse.ArgumentParser:
   ar.add_argument('keyword', nargs='?', help='list/desc 的关键字过滤；read 的包内路径')
   ar.add_argument('--max', type=int, default=1200, help='read 最多输出多少字符，0 表示全部')
   ar.set_defaults(func=cmd_asar)
+
+  i23 = sub.add_parser('i23d', help='单图生成 3D 模型（腾讯混元 HY-3D，产出带贴图 GLB）')
+  i23.add_argument('--image', required=True, help='输入图片路径')
+  i23.add_argument('--model', default='hy-3d-3.1',
+                   choices=['hy-3d-3.1', 'hy-3d-polygen-image', 'hy-3d-express'],
+                   help='3.1 最细但最慢（3 分钟+）；polygen 最快（25 秒）但无贴图')
+  i23.add_argument('--faces', type=int, default=10000, help='面数上限 100~20000，默认 10000')
+  i23.add_argument('--out', required=True, help='输出 GLB 路径')
+  i23.add_argument('--timeout', type=int, default=900, help='轮询总超时（秒），默认 900')
+  i23.add_argument('--interval', type=int, default=10, help='轮询间隔（秒），默认 10')
+  i23.add_argument('--json', action='store_true')
+  i23.set_defaults(func=cmd_i23d)
 
   ci = sub.add_parser('ci', help='查某个 commit 的 CI 状态')
   ci.add_argument('sha', nargs='?', default='HEAD', help='commit sha，默认 HEAD')
@@ -1349,6 +1481,14 @@ def build_parser() -> argparse.ArgumentParser:
   fa.add_argument('--file', help='从文件读文本')
   fa.set_defaults(func=cmd_fact)
 
+  si = sub.add_parser('since', help='算「从某天到今天」过了多久（说时长前先跑它，别手算）')
+  si.add_argument('date', nargs='?', help='2026-10-20 / 10-20 / 2026/10/20（不给就报用法）')
+  si.set_defaults(func=cmd_since)
+
+  nw = sub.add_parser('now', help='报当前本地时间；--since 算「距某时刻多久」（说任何时间词前先跑）')
+  nw.add_argument('--since', help='参照时刻，如 2026-11-09T13:52（算「距它多久」）')
+  nw.set_defaults(func=cmd_now)
+
   bal = sub.add_parser('balance', help='DeepSeek 余额 + 今日花费估算（抄自 dsh-balance-tracker）')
   bal.add_argument('--json', action='store_true', help='输出 JSON')
   bal.set_defaults(func=cmd_balance)
@@ -1387,6 +1527,8 @@ def build_parser() -> argparse.ArgumentParser:
   sc = sub.add_parser('selfcheck', help='机制随能力漂移：文档里的子命令/路径/计数跟磁盘对不对得上')
   sc.add_argument('--json', action='store_true')
   sc.add_argument('--only', type=int, help='只跑第 N 组（1 起）')
+  sc.add_argument('--update-fingerprint', action='store_true',
+                  help='审完 §0.1 之后记下新基准（第 13 组用）')
   sc.set_defaults(func=cmd_selfcheck)
 
   tl = sub.add_parser('tools', help='工具使用率：我有的工具里哪些一次都没调用过（治「装了不用」）')
@@ -1416,10 +1558,23 @@ def build_parser() -> argparse.ArgumentParser:
   sk.set_defaults(func=cmd_skill)
 
   tr = sub.add_parser('tier', help='开工前报数：这活有多少、配什么档、手边有什么能用的')
-  tr.add_argument('task', help='任务描述（一句话）')
+  tr.add_argument('task', nargs='?', default='', help='任务描述（一句话）；--audit / --inventory 时可不给')
   tr.add_argument('--no-assets', action='store_true', help='跳过资产扫描（快 1 秒，但没推荐）')
+  tr.add_argument('--inventory', action='store_true', help='打印「不构成路线的资产」清单')
+  tr.add_argument('--audit', action='store_true', help='路线清单体检：重复/死路径/空壳/代号/该休整的域')
   tr.add_argument('--json', action='store_true', help='输出 JSON')
+  # 经验链回写（2026-11-13）：lab.py 与 tier.py 是两层 argparse，这边不声明
+  # 就 unrecognized——补声明 + cmd_tier 透传。上次只改了 tier.py 忘了这里，实测才暴露。
+  tr.add_argument('--chain', choices=['record', 'deviate'],
+                  help='经验链：record=验证过的组装回写进库（必带证据）；deviate=链被更好组装打穿，记一票')
+  for _ck in ('name', 'tags', 'how', 'crit', 'tier', 'commit', 'file', 'reason'):
+    tr.add_argument(f'--chain-{_ck}', dest=f'chain_{_ck}', default='',
+                    help=f'经验链参数 {_ck}（详见 lab tier --help 的 --chain 说明）')
   tr.set_defaults(func=cmd_tier)
+
+  pr = sub.add_parser('pre', help='开工前三合一：记忆 + 档位/路线 + 机制一致性（一条命令，<8 秒）')
+  pr.add_argument('task', nargs='?', default='', help='任务描述（一句话，照抄用户原话最好）')
+  pr.set_defaults(func=cmd_pre)
 
   co = sub.add_parser('cost', help='这一步花了多少钱：从 bili.log 读 acp-usage，按小时聚合（只算 input）')
   co.add_argument('--hours', type=float, default=24, help='看最近几小时，默认 24')
@@ -1463,7 +1618,13 @@ def build_parser() -> argparse.ArgumentParser:
   rc.add_argument('--json', action='store_true')
   rc.add_argument('--audit', action='store_true', help='看最近有没有在用（读 .recall.log）')
   rc.add_argument('--days', type=int, default=7, help='--audit 的时间窗口')
+  rc.add_argument('--use', metavar='ID', help='记一笔「这条记忆真的改变了我的动作」（配合 --note）')
+  rc.add_argument('--note', default='', help='--use 的说明：改了什么动作')
   rc.set_defaults(func=cmd_recall)
+
+  nt = sub.add_parser('nettest', help='下载前先量吞吐：给几个 URL，各下 8MB 测速，报最快的那个')
+  nt.add_argument('urls', nargs='+', help='一个或多个下载地址')
+  nt.set_defaults(func=cmd_nettest)
 
   rv = sub.add_parser('review', help='复盘：完成声明证据率 + 被否定次数，写回复盘状态（P5 的触发点）')
   rv.set_defaults(func=cmd_review)
@@ -1513,6 +1674,10 @@ def build_parser() -> argparse.ArgumentParser:
   dp.add_argument('--check', action='store_true', help='只比，不同步')
   dp.set_defaults(func=cmd_deploy)
 
+  bl = sub.add_parser('blender', help='用 Blender 的 Python API 建模/渲染/导出 GLB（headless）')
+  bl.add_argument('rest', nargs=argparse.REMAINDER, help='子命令与参数原样透传：check / demo / run <脚本.py> [-- 参数]')
+  bl.set_defaults(func=cmd_blender)
+
   tk = sub.add_parser('tasks', help='计划任务体检：状态 / 上次结果 / 下次时间 / 电池空闲网络条件')
   tk.add_argument('--json', action='store_true', help='输出 JSON')
   tk.set_defaults(func=cmd_tasks)
@@ -1530,10 +1695,94 @@ def build_parser() -> argparse.ArgumentParser:
   un.add_argument('--last', action='store_true', help='看最近一次运行')
   un.set_defaults(func=cmd_unattended)
 
+  tp = sub.add_parser('test', help='跑 lab 自己的测试（tools/lab/tests/）')
+  tp.add_argument('-v', '--verbose', action='store_true', help='pytest -v')
+  tp.add_argument('-k', help='pytest -k 过滤')
+  tp.set_defaults(func=cmd_test)
+
+  hp = sub.add_parser('health', help='候选路线库体检（假域/空命中/高频低权）')
+  hp.add_argument('--force', action='store_true', help='不看闸门，强制跑（默认按事件累积：+10 次 tier 或 +100 行调用日志）')
+  hp.add_argument('--json', action='store_true', help='输出 JSON 而不是写报告')
+  hp.set_defaults(func=cmd_health)
+
+  op = sub.add_parser('onboard', help='自研插件闭环检查：在路线库/有描述/用过（自动判，不用手动标记）')
+  op.add_argument('--no-calls', action='store_true', help='跳过会话日志的调用统计（快，但「用过」列会变成 n/a）')
+  op.add_argument('--only', metavar='NAME', help='只看名字里含这个子串的插件')
+  op.set_defaults(func=cmd_onboard)
+
   return parser
 
 
-def _review_remind() -> None:
+# ------------------------------------------------------------- test
+
+def cmd_test(a: argparse.Namespace) -> int:
+  r"""跑 lab 自己的测试（tools/lab/tests/）。
+
+  为什么不用 sys.executable：DSH runtime python 里没装 pytest，
+  而 `进阶-20261029\.venv` 那个有。找不到就退回 sys.executable 并明确告警。
+  """
+  tests = Path(__file__).resolve().parent / 'tests'
+  if not tests.is_dir():
+    return _fail(2, f'测试目录不存在: {tests}')
+
+  pyexe = ROOT / '进阶-20261029' / '.venv' / 'Scripts' / 'python.exe'
+  if not pyexe.exists():
+    pyexe = Path(sys.executable)
+    print(f'[WARN] 没找到 venv python，退回 {pyexe}（可能没装 pytest）')
+
+  # --basetemp 指到 tools/lab/.pytest-tmp：否则 pytest 会在 cwd（= 工作区根）
+  # 建 `pytest-of-<user>/` 垃圾目录（2026-11-07 实测 38 个文件落在根目录）。
+  basetemp = Path(__file__).resolve().parent / '.pytest-tmp'
+  cmd = [str(pyexe), '-m', 'pytest', str(tests), '-q', '--basetemp', str(basetemp)]
+  if a.verbose:
+    cmd.append('-v')
+  if a.k:
+    cmd.extend(['-k', a.k])
+  print('$ ' + ' '.join(cmd))
+  r = subprocess.run(cmd, cwd=str(ROOT), text=True, encoding='utf-8', errors='replace')
+  return 0 if r.returncode == 0 else 1
+
+
+def cmd_health(a: argparse.Namespace) -> int:
+  r"""候选路线库体检（tools/lab/route_health.py）。
+
+  闸门按**事件累积**不是日历：自上次体检以来，tier 调用 +10 次或调用日志 +100 行，先到先触发。
+  用户 2026-11-07 m12153：「每周时间间隔太长了，你每天的变化都是日新月异的。」
+  """
+  import importlib.util
+  here = Path(__file__).resolve().parent
+  spec = importlib.util.spec_from_file_location('route_health', here / 'route_health.py')
+  mod = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(mod)
+  argv = ['route_health.py']
+  if a.force:
+    argv.append('--force')
+  if a.json:
+    argv.append('--json')
+  return mod.main(argv)
+
+
+def cmd_onboard(a: argparse.Namespace) -> int:
+  r"""自研插件闭环检查（tools/lab/onboard.py）。
+
+  三件自动判定，**不依赖手动标记**：①有 description 吗 ②在候选路线库（tier.py）里吗
+  ③它的工具被调用过吗（按插件类型分：主动工具看调用数、被动看日志、纯展示不判）。
+  用户 2026-11-07 m12313：「只是留痕吗？你不进行。记录。然后把它补进你的候选路线库吗？」
+  """
+  import importlib.util
+  here = Path(__file__).resolve().parent
+  spec = importlib.util.spec_from_file_location('onboard', here / 'onboard.py')
+  mod = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(mod)
+  argv = ['onboard.py']
+  if a.no_calls:
+    argv.append('--no-calls')
+  if a.only:
+    argv += ['--only', a.only]
+  return mod.main(argv)
+
+
+def _review_remind(repo: Path | None = None) -> None:
   """打一行复盘状态。只读 state 文件，不扫会话——挂在 commit 后面必须是 0 成本的。"""
   try:
     here = Path(__file__).resolve().parent
@@ -1543,6 +1792,84 @@ def _review_remind() -> None:
     review.remind()
   except Exception as e:
     print(f'[WARN] 复盘提醒失败（不影响主流程）：{type(e).__name__}: {e}')
+  # 2026-11-05（方案③）：把「自检」挂到已经必然发生的事件上——commit 成功就是那个事件。
+  # claims/fact 的触发信号在 SKILL §5.1.2 写得很清楚，但从没被触发过；不靠「记得用」，靠「每次 commit 都看见」。
+  print(r'[证据] 要说「做完了/做成了」→ lab claims；要说具体数字 → lab fact "<那一段>"')
+  # 2026-11-05（用户问「你会每次都用吗」之后加的）：光有规则和记忆不够——「交付」这个动作没有 hook，
+  # 只有必然发生的事件才拦得住。commit 是其中一个。
+  print(r'[第二版] 交付前问三句：①他真正要的是什么 ②第一版漏了什么 ③追问「还有呢」会补什么')
+  # 2026-11-07（用户 m10500「O. 可以的」）：commit 成功是「记日志」的必然触发点。
+  # 自检发现 11-06 的 14 条提交里 9 条没进决策日志——`lab log` 不是流程的一部分，
+  # 是「想起来才做」。挂到 commit 后面，让「提交了但没记」变成能看见的事。
+  _log_remind()
+  _home_repo_remind(repo)
+
+
+def _needs_log_remind(log_mtime: float, commit_ts: int) -> bool:
+  """日志比提交旧就该提醒。抽成纯函数是为了能直接测边界。
+
+  相等也算「已经记过」——同一秒内 lab log 再 lab commit 不该念。
+  """
+  return log_mtime < commit_ts
+
+
+def _log_remind() -> None:
+  """提交后提醒记日志。判据：最近一次提交比决策日志新 → 提交了但没记。
+
+  2026-11-07 建的触发点：`lab log` 早就有了，但一直是「想起来才做」。
+  第一版判据「今天有没有 ## YYYYMMDD」是错的——今天补过一条之后，
+  后面十件事都不会再提醒了。改成比时间戳：HEAD 的 committer 时间
+  晚于日志 mtime，说明这条提交之后还没写日志，于是提醒。
+
+  正确工作流是「先 commit、看到提醒、再 log」：log 写完 mtime 就比 HEAD 新，
+  下一条提交才会再提醒。反过来「先 log 再 commit」仍会提醒一次——
+  那条 commit 确实还没进日志，提醒没错（2026-11-07 实测确认）。
+  """
+  try:
+    if not DECISION_LOG.exists():
+      return
+    git = Path(r'E:/DS公作区\tools\git\cmd\git.exe')
+    if not (ROOT / '.git').exists() or not git.exists():
+      return
+    r = subprocess.run((str(git), '-C', str(ROOT), 'log', '-1', '--format=%ct'),
+                       capture_output=True, text=True, encoding='utf-8',
+                       errors='replace', timeout=10)
+    if r.returncode != 0 or not r.stdout.strip().isdigit():
+      return
+    commit_ts = int(r.stdout.strip())
+    if not _needs_log_remind(DECISION_LOG.stat().st_mtime, commit_ts):
+      return
+    head = subprocess.run((str(git), '-C', str(ROOT), 'log', '-1', '--format=%h %s'),
+                          capture_output=True, text=True, encoding='utf-8',
+                          errors='replace', timeout=10).stdout.strip()
+    print(f'[日志] 这次提交还没进决策日志：{head}')
+    print('  → lab log --mark <标识> --title "<一句话>" --body-file <file>')
+    print('    （小节必填：做了什么 / 为什么 / 取舍 / 教训）')
+  except Exception:
+    pass
+
+
+def _home_repo_remind(exclude: Path | None = None) -> None:
+  """主仓库有未提交改动时提一行。自研代码改了不提交，回滚点就是旧的。
+
+  2026-11-05 建本地仓库后加的：仓库有了，但「什么时候提交」没有触发点——
+  和 §5.1 那些写了却从没被触发的信号是同一个毛病。
+  """
+  try:
+    if exclude is not None and Path(exclude).resolve() == ROOT.resolve():
+      return
+    git = Path(r'E:/DS公作区\tools\git\cmd\git.exe')
+    if not (ROOT / '.git').exists() or not git.exists():
+      return
+    r = subprocess.run((str(git), '-C', str(ROOT), 'status', '--porcelain'),
+                       capture_output=True, text=True, encoding='utf-8',
+                       errors='replace', timeout=10)
+    lines = [ln for ln in (r.stdout or '').splitlines() if ln.strip()]
+    if lines:
+      print(f'[主仓库] {len(lines)} 个文件有改动没提交 —— 回滚点还是旧的')
+      print(r'  → cd E:/DS公作区 && git commit -m "..."')
+  except Exception:
+    pass
 
 
 def cmd_review(a: argparse.Namespace) -> int:
@@ -1555,6 +1882,17 @@ def cmd_review(a: argparse.Namespace) -> int:
   return _sp.run([sys.executable, str(script)]).returncode
 
 
+def cmd_nettest(a: argparse.Namespace) -> int:
+  """下载前先量吞吐：转调同目录的 nettest.py。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('nettest.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), *a.urls]
+  return _sp.call(cmd)
+
+
 def cmd_recall(a: argparse.Namespace) -> int:
   """开工第一步：转调同目录的 recall.py。"""
   import subprocess as _sp
@@ -1563,7 +1901,9 @@ def cmd_recall(a: argparse.Namespace) -> int:
     print(f'[ERROR] 找不到 {script}', file=sys.stderr)
     return 2
   cmd = [sys.executable, str(script)]
-  if a.audit:
+  if a.use:
+    cmd += ['--use', a.use, '--note', a.note]
+  elif a.audit:
     cmd += ['--audit', '--days', str(a.days)]
   else:
     if a.task:
@@ -1573,7 +1913,11 @@ def cmd_recall(a: argparse.Namespace) -> int:
     cmd += ['--top', str(a.top), '--min', str(a.min)]
     if a.json:
       cmd.append('--json')
-  return _sp.run(cmd).returncode
+  rc = _sp.run(cmd).returncode
+  # 2026-11-05（方案③）：零命中时给下一步，而不是让「没命中」变成死路。
+  if rc == 1 and not a.audit:
+    print('[提示] 零命中。两条路：①换个关键词——用用户的原话，别用你自己的概括；②lab sessions 查以前聊过什么')
+  return rc
 
 
 def cmd_rework(a: argparse.Namespace) -> int:
@@ -1655,6 +1999,16 @@ def cmd_unattended(a: argparse.Namespace) -> int:
     if a.dry:
       cmd.append('--dry')
   return _sp.run(cmd).returncode
+
+
+def cmd_blender(a: argparse.Namespace) -> int:
+  """用 Blender 的 Python API 建模/渲染/导出 GLB（headless，参数透传给 blender.py）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('blender.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  return _sp.run([sys.executable, str(script), *a.rest]).returncode
 
 
 def cmd_vet(a: argparse.Namespace) -> int:
@@ -1840,11 +2194,23 @@ def cmd_tier(a: argparse.Namespace) -> int:
   if not script.is_file():
     print(f'[ERROR] 找不到 {script}', file=sys.stderr)
     return 2
-  cmd = [sys.executable, str(script), a.task]
+  cmd = [sys.executable, str(script)]
+  if getattr(a, 'task', ''):
+    cmd.append(a.task)
   if getattr(a, 'no_assets', False):
     cmd.append('--no-assets')
+  if getattr(a, 'inventory', False):
+    cmd.append('--inventory')
+  if getattr(a, 'audit', False):
+    cmd.append('--audit')
   if getattr(a, 'json', False):
     cmd.append('--json')
+  if getattr(a, 'chain', ''):
+    cmd += ['--chain', a.chain]
+    for _k in ('name', 'tags', 'how', 'crit', 'tier', 'commit', 'file', 'reason'):
+      _v = getattr(a, f'chain_{_k}', '')
+      if _v:
+        cmd += [f'--chain-{_k}', str(_v)]
   return _sp.run(cmd).returncode
 
 
@@ -1887,12 +2253,179 @@ def cmd_selfcheck(a: argparse.Namespace) -> int:
     args.append('--json')
   if getattr(a, 'only', None):
     args += ['--only', str(a.only)]
+  if getattr(a, 'update_fingerprint', False):
+    args.append('--update-fingerprint')
   r = _sp.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace')
   if r.stdout:
     print(r.stdout, end='')
   if r.stderr:
     print(r.stderr, file=sys.stderr, end='')
   return r.returncode
+
+
+def cmd_pre(a: argparse.Namespace) -> int:
+  """开工前三合一：recall（记忆）+ tier（档位/路线）+ selfcheck（机制一致）。
+
+  为什么要合：`lab recall` 和 `lab tier` 每轮开工都该跑，`lab selfcheck`
+  有十几组却几乎不跑——因为它慢、输出长。结果是它只有在我特意想起时才
+  起作用，那跟「靠记性」没区别。
+
+  设计约束（写死了才叫验收）：
+    ① 一条命令出齐三块，总耗时 < 8 秒；
+    ② selfcheck 全绿时只输出一行，有漂移才展开；
+    ③ tier 的时间行保留；
+    ④ 它自己必须进候选路线库（不然我会忘——「入口没开」已经栽过四次）。
+    ⑤ **两天内没被用过 → 判它没通过，砍掉**（用户 2026-11-09 定：
+       「一个月太久了，两天吧。这种验证式的期限不要定太久。太长了。」）
+       ——验证式期限要短到还能记住，才叫验证；长到需要别人提醒就是摆设。
+
+  依赖契约（2026-11-10 改）：
+    三个子脚本一律以 **纯 JSON** 输出（recall.py --json / tier.py --json /
+    selfcheck.py --json），这边只解析字段、只负责排版。
+    旧的写法是「拿人读文本 + 四个正则剪」（命中 N 条 / 块首序号 / 【3】【5】 /
+    共 N 处漂移）——谁改一句文案，这边就静默少一段，看起来像「这次没命中」。
+    契约化之后，措辞归子脚本、排版归这里，各改各的互不影响。
+
+  退出码：0 = 三块都正常；1 = 有块出错或机制漂移。
+  """
+  task = (a.task or '').strip()
+  t0 = time.time()
+  lab = Path(__file__).resolve()
+  line = '─' * 68
+
+  print('═' * 68)
+  print(f'开工前  ·  {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+  print('═' * 68)
+  if task:
+    print(f'任务：{task}')
+  else:
+    print('任务：（没给任务词——只查机制一致性）')
+  print()
+
+  def _run_json(script: Path, extra: list[str]):
+    """跑子脚本，把 stdout 解析成 JSON。返回 (对象或 None, 错误说明, 退出码)。"""
+    try:
+      r = subprocess.run([sys.executable, str(script), *extra],
+                         capture_output=True, text=True,
+                         encoding='utf-8', errors='replace', timeout=120)
+    except Exception as e:  # noqa: BLE001
+      return None, f'[跑不起来] {type(e).__name__}: {e}', 2
+    raw = r.stdout or ''
+    try:
+      return json.loads(raw), (r.stderr or ''), r.returncode
+    except Exception as e:  # noqa: BLE001
+      return None, (f'[JSON 解析失败] {type(e).__name__}: {e} | rc={r.returncode}'
+                    f' | stdout 前 160 字: {raw[:160]!r}'), 2
+
+  bad = 0
+
+  # ── 1. 记忆 ─────────────────────────────────────────────
+  rec, recall_err, _ = _run_json(
+      lab.with_name('recall.py'),
+      ([task] if task else []) + ['--top', '6', '--body', '2', '--json'])
+  if rec is None:
+    bad += 1
+    print('【记忆】⚠️ ' + recall_err.strip()[:160])
+  else:
+    terms = rec.get('terms') or []
+    hits = rec.get('hits') or []
+    print(f'【记忆】[RECALL] 提词 {len(terms)} 个: ' + ' / '.join(terms))
+    print(f'   {rec.get("total", 0)} 条里命中 {len(hits)} 条')
+    if not hits:
+      print('   零命中——按新任务处理；如果确实做过类似的事，换个更具体的词再试一次。')
+    for i, h in enumerate(hits[:2], 1):
+      imp = h.get('importance') or 0
+      title = h.get('title') or ''
+      hit_words = ' '.join(h.get('hit') or [])
+      score = h.get('score')
+      mid = h.get('id')
+      print(f'   {i}. [{imp}/5] {title}')
+      print(f'      命中: {hit_words}   分数 {score}   id {mid}')
+      body = (h.get('content') or '').strip()
+      if body:
+        for ln in body.splitlines():
+          print('      ' + ln.strip()[:240])
+  print()
+
+  # ── 2. 档位 + 路线 ───────────────────────────────────────
+  tj, tier_err, _ = _run_json(
+      lab.with_name('tier.py'),
+      ([task] if task else []) + ['--no-assets', '--json'])
+  if tj is None:
+    bad += 1
+    print('【档位】⚠️ ' + tier_err.strip()[:160])
+  else:
+    print(f'【档位】{tj.get("tier") or "?"}')
+    opts = tj.get('opts') or []
+    if opts:
+      print('【路线】')
+      printed = 0
+      for o in opts:
+        if printed >= 40:
+          break
+        dom = o.get('domain') or '?'
+        print(f'  [{dom}]')
+        for r in (o.get('routes') or []):
+          if printed >= 40:
+            break
+          code = r.get('code') or '?'
+          name = r.get('name') or ''
+          print(f'    {code}. {name}'[:120])
+          printed += 1
+    else:
+      print('【路线】（这次没命中任何域——可能是新一类任务，该加域或补词）')
+  print()
+
+  # ── 3. 机制一致性 ───────────────────────────────────────
+  report, sc_err, _ = _run_json(lab.parent / 'selfcheck.py', ['--json'])
+  if report is None:
+    bad += 1
+    print('【机制】⚠️ ' + sc_err.strip()[:160])
+  else:
+    hard = [it for g in report for it in (g.get('items') or [])
+            if not it.get('soft')]
+    if hard:
+      bad += 1
+      print(f'【机制】⚠️ {len(hard)} 处漂移——展开：')
+      for it in hard[:12]:
+        kind = it.get('kind') or ''
+        claim = it.get('claim') or ''
+        actual = it.get('actual') or ''
+        where = it.get('where') or ''
+        print(f'  · {kind}')
+        print(f'     说的：{claim}')
+        print(f'     实际：{actual}')
+        if where:
+          print(f'     位置：{where}')
+    else:
+      print('【机制】一致（0 漂移）')
+
+  # ── 4. 进化队列（2026-11-12 加）─────────────────────────────
+  # 为什么放这儿：dsh-evolve 的候选队列我从来不主动看（`evolve_list` 46 个
+  # 会话里调了 10 次，全是被动响应用户，不是自己想起来）。挂在开工检查里，
+  # 是为了让它有一个必然出现的时刻，而不是再一次依赖「我记得去看」。
+  try:
+    ev_path = lab.parent.parent.parent / '自进化' / 'candidates.json'
+    ev = json.loads(ev_path.read_text(encoding='utf-8'))
+    items = ev if isinstance(ev, list) else (ev.get('candidates') or [])
+    items = [i for i in items if isinstance(i, dict)]
+    pend = [i for i in items if i.get('status', 'pending') == 'pending']
+    if pend:
+      print(f'【进化】{len(pend)} 条 pending 候选（共 {len(items)} 条）——'
+            f'`lab review` 看全表，值得哪天做的挑一条')
+    else:
+      print(f'【进化】0 条 pending（共 {len(items)} 条，'
+            f'{len([i for i in items if i.get("status") == "done"])} 已完成 / '
+            f'{len([i for i in items if i.get("status") == "deferred"])} 已搁置）')
+  except Exception:  # noqa: BLE001
+    pass  # 队列文件不在/坏了不该拖垮开工检查
+
+  print()
+  print(line)
+  print(f'耗时 {time.time() - t0:.1f}s   ·   下一步：写一行组合理由再动手'
+        f'（选 A 因为…；不选 B 因为…；A 的结论让 C 不用做）')
+  print('期限：两天内没被用过 → 判它没通过，砍掉（2026-11-09 用户定：验证式期限不要定太久）')
+  return 0 if bad == 0 else 1
 
 
 def cmd_claims(a: argparse.Namespace) -> int:
@@ -1936,6 +2469,110 @@ def cmd_fact(a: argparse.Namespace) -> int:
   if r.stderr:
     print(r.stderr, file=sys.stderr, end='')
   return r.returncode
+
+
+def cmd_since(a: argparse.Namespace) -> int:
+  """算「从某天到今天」过了多久（治「说时长随口编」）。
+
+  为什么需要这条：手算「10-20 到 11-08 多少天」很容易错，错了就倾向于编一个数。
+  有 2 秒能算对的路，就不会去编。
+
+  2026-11-08 立，用户 m14743：「你总是乱说时间，一会昨天一会前天」。
+  配套规矩在 SKILL.md §0：正文里的「昨天/上周/N 个月」必须能指出数据来源，
+  指不出就改写「之前」；要说具体多久，先跑这条。
+  """
+  import datetime as _dt
+  raw = (a.date or '').strip().replace('/', '-').replace('.', '-')
+  if not raw:
+    print('用法：lab since 2026-10-20（也接受 10-20 / 2026/10/20）', file=sys.stderr)
+    return 2
+  today = _dt.date.today()
+  try:
+    parts = [int(x) for x in raw.split('-') if x != '']
+  except ValueError:
+    print(f'日期格式不对：{a.date}（要 2026-10-20 或 10-20）', file=sys.stderr)
+    return 2
+  try:
+    if len(parts) == 3:
+      start = _dt.date(*parts)
+    elif len(parts) == 2:
+      start = _dt.date(today.year, parts[0], parts[1])
+      if start > today:                      # 只给月日且还没到 → 是去年的
+        start = _dt.date(today.year - 1, parts[0], parts[1])
+    else:
+      raise ValueError('段数不对')
+  except ValueError:
+    print(f'不是合法日期：{a.date}', file=sys.stderr)
+    return 2
+
+  delta = (today - start).days
+  wd = '一二三四五六日'
+  if delta < 0:
+    human = f'{-delta} 天后（未来日期）'
+  elif delta == 0:
+    human = '就是今天'
+  elif delta == 1:
+    human = '1 天前'
+  elif delta < 14:
+    human = f'{delta} 天前'
+  elif delta < 60:
+    w, d = divmod(delta, 7)
+    human = f'{delta} 天前（{w} 周' + (f'零 {d} 天' if d else '') + '）'
+  else:
+    human = f'{delta} 天前（约 {round(delta / 30.44)} 个月）'
+  print(f'{human}　{start.isoformat()}（周{wd[start.weekday()]}） → '
+        f'{today.isoformat()}（周{wd[today.weekday()]}）')
+  return 0
+
+
+def cmd_now(a: argparse.Namespace) -> int:
+  """报当前本地时间；带 --since 时算出「距那个时刻多久」。
+
+  2026-11-09 立，用户 m17083 原话：「那做一次闸，每次回答时间之类的问题
+  的时候，必须看一眼本地时间与上一轮对话的时间可以吗？……把时间准确确认
+  这件事做好罢了。」
+
+  为什么要有它：我 2026-11-09 把 11 分钟前说成「昨天」，那是同一个下午。
+  11-06 的整改挂在 RULE_SIGNALS，只检查「用户消息里有没有时间词」，
+  挂不到我的输出——所以那条规则一次都没拦住过我。这个命令是**说时间词
+  之前必须跑的那一眼**：不跑，我手上就没有任何时间锚点。
+  """
+  import datetime as _dt
+  now = _dt.datetime.now()
+  wd = '一二三四五六日'
+  print(f'现在 {now:%Y-%m-%d %H:%M:%S}（周{wd[now.weekday()]}）')
+  # 档位行（复用 tier.now_line：周末/高峰/距下一个价档边界还有多久）
+  try:
+    sys.path.insert(0, str(ROOT / 'tools' / 'lab'))
+    import tier as _tier  # noqa: PLC0415
+    print('  ' + _tier.now_line())
+  except Exception:  # noqa: BLE001
+    pass
+  raw = (getattr(a, 'since', '') or '').strip()
+  if not raw:
+    return 0
+  try:
+    t = _dt.datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    if t.tzinfo is not None:
+      t = t.astimezone().replace(tzinfo=None)
+  except Exception:  # noqa: BLE001
+    print(f'--since 的格式不对：{raw}（要 2026-11-09T13:52 或 2026-11-09 13:52）',
+          file=sys.stderr)
+    return 2
+  sec = int((now - t).total_seconds())
+  if sec < 0:
+    human = f'{-sec} 秒后（未来）'
+  elif sec < 60:
+    human = f'{sec} 秒前'
+  elif sec < 3600:
+    human = f'{sec // 60} 分钟前'
+  elif sec < 86400:
+    h, m = divmod(sec // 60, 60)
+    human = f'{h} 小时 {m} 分钟前' if m else f'{h} 小时前'
+  else:
+    human = f'{sec // 86400} 天前'
+  print(f'  距 {t:%Y-%m-%d %H:%M} 是 **{human}**')
+  return 0
 
 
 def cmd_balance(a: argparse.Namespace) -> int:

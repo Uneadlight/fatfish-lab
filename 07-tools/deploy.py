@@ -27,20 +27,25 @@ from pathlib import Path
 ROOT = Path(r'D:\work')
 PROFILE_NM = Path(r'~/.dsh\profiles\desktop\node_modules')
 
-# 插件名 → 源码目录。`@local/X` 映射到 `D:\work\X`，顶层包名同名。
+# 插件名 → 源码目录。取包名最后一段映射到 `D:\work\<base>`。
+# 2026-11-13：env-doctor / vision / chat-background 三个已发布到 npm，包名改用 @un10086/ scope。
 SELF_BUILT = [
-    '@local/dsh-env-doctor',
+    '@un10086/dsh-env-doctor',
     '@local/dsh-evolve',
-    '@local/dsh-vision',
+    '@un10086/dsh-vision',
     '@local/dsh-workflow-skill',
     '@local/dsh-worktree-tool',
-    '@local/open-design-mcp',
+    # 2026-11-07 移除：open-design-mcp 已于 2026-11-05 卸载（MCP server 从没连上、0 使用），
+    # 源码 D:\work\open-design-dsh-bundle 保留，要装回时加回来即可。
     'dsh-memory',
     'dsh-stickers',
-    'dsh-chat-background',
+    '@un10086/dsh-chat-background',
     # 2026-11-05 加：env_doctor 抓到它源码 0.2.0 / profile 0.1.0——
     # v0.2 的「两个事件都挂 + 去重」从 11-03 写完就没落地过，因为它不在这个表里。
     'dsh-self-guard',
+    # 2026-11-07 加：它一直装着、有源码，但不在表里 → lab deploy 从没同步过它。
+    # 判定在装的依据：dsh-*/ 有 package.json 且 profile/node_modules 下有同名目录。
+    'dsh-session-delete',
 ]
 
 # 不同步的东西：体积大 + 不影响运行
@@ -211,6 +216,7 @@ def cmd_deploy(names: list[str], check: bool) -> int:
     print()
     total_bad = 0
     need_restart: list[tuple[str, str]] = []
+    synced_now: list[str] = []
     for name in names:
         s = src_dir(name)
         d = dst_dir(name)
@@ -255,10 +261,11 @@ def cmd_deploy(names: list[str], check: bool) -> int:
                 need_restart.append((name, h))
             continue
 
-        # 同步前先备份 profile 那一份。备份必须放在 备份/deploy/ 下，不能放在插件同目录——
+        # 同步前先备份 profile 那一份。备份必须放在 备份/03-自研插件/deploy/ 下，不能放在插件同目录——
         # 否则 `D:\work\dsh-xxx.bak-<时间>` 会被 env_doctor 当成「未登记的自研插件」报警
         # （2026-11-04 实测，两次同步留下两个 .bak 目录，巡检连着报了两条 WARN）。
-        bak_root = ROOT / '备份' / 'deploy'
+        # 2026-11-05 备份目录按用户要求分七类，deploy 归 03-自研插件。
+        bak_root = ROOT / '备份' / '03-自研插件' / 'deploy'
         bak_root.mkdir(parents=True, exist_ok=True)
         bak = bak_root / f'{d.name}-{time.strftime("%Y%m%d-%H%M%S")}'
         try:
@@ -271,6 +278,8 @@ def cmd_deploy(names: list[str], check: bool) -> int:
         if after.get('in_sync'):
             print(f'✅ {name:<30} 已同步（复制 {r.get("copied", 0)} 个文件，{after["same"]} 个一致）')
             total_bad -= 1
+            if r.get('copied', 0) > 0:
+                synced_now.append(name)
         else:
             print(f'❌ {name:<30} 同步后仍不一致')
         hint = restart_hint(name)
@@ -291,6 +300,34 @@ def cmd_deploy(names: list[str], check: bool) -> int:
         print(f'共 {total_bad} 个需要同步' if total_bad else '全部已同步')
     else:
         print('全部就绪' if not total_bad else f'{total_bad} 个仍有问题')
+
+    # 闭环：这次同步了东西，但候选路线库里有没有它的位置？
+    # 判据（用户 m12149「这可不行」）：能力落地了但路线库里没有 → 不算真的落地。
+    # 只提示、不阻断——同步本身成功了，闭环是下一步的事。
+    if synced_now:
+        tier_py = Path(__file__).resolve().parent / 'tier.py'
+        try:
+            tier_text = tier_py.read_text(encoding='utf-8')
+        except OSError:
+            tier_text = ''
+        missing = []
+        for n in synced_now:
+            short = n.split('/')[-1].strip()
+            # 判「它的能力在路线库里」不判「它的名字在路线库里」——
+            # dsh-memory 在路线库里写的是 memory_search，按名字判会误报（同 onboard.py）
+            key = short.replace('dsh-', '').replace('-', '_')
+            if short and short not in tier_text and key not in tier_text:
+                missing.append(short)
+        print()
+        if missing:
+            print('⚠️  闭环没走完——这些刚同步的插件在候选路线库里找不到位置：')
+            for n in missing:
+                print(f'   - {n}')
+            print('   跑 `lab onboard` 看它还差哪一步（在路线库 / 有描述 / 用过），三列自动判，不用你手动标记。')
+            print('   补法：给 tier.py 对应域加一条路线（或 AUX_MAP）。')
+            print('   判据：`lab tier "<它该用的场景>"` 能命中它，才算真的落地。')
+        elif tier_text:
+            print('✅ 闭环：这次同步的插件在候选路线库里都有位置（细节跑 `lab onboard`）')
     return 1 if total_bad else 0
 
 

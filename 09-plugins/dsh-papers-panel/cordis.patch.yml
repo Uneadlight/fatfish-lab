@@ -1,0 +1,10 @@
+# dsh-papers-panel —— DSH bundle patch
+#
+# 只挂 Host 半侧一条 entry；浏览器半侧（侧栏图标 + main 面板）由 package.json
+# 的 dsh.client 声明自动组装。
+#
+# 注意：name 以 @ 开头，YAML 里必须加引号，否则 js-yaml 会抛
+# "bad indentation of a mapping entry"。
+- insert:
+    - id: papers-panel
+      name: "@un10086/dsh-papers-panel"

@@ -103,8 +103,50 @@ def session_files() -> list[Path]:
     )
 
 
-def build_index(quiet: bool = False) -> dict:
-    """Rewrite the flat index from every session file. Returns the meta dict."""
+MANIFEST_VERSION = 1
+
+
+def _fingerprint(path: Path) -> dict:
+    """一个会话文件的代理指纹：mtime 毫秒 + 字节数。变了才重解析。"""
+    st = path.stat()
+    return {"mtime_ms": int(st.st_mtime * 1000), "size": st.st_size}
+
+
+def _read_meta() -> dict:
+    """读索引元数据；版本不对或坏掉就当没有（下次全量重建）。"""
+    try:
+        meta = json.loads(META_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(meta, dict) or meta.get("version") != MANIFEST_VERSION:
+        return {}
+    return meta
+
+
+def _load_index_grouped() -> dict[str, list[dict]]:
+    """旧索引按 8 位会话 id 分组，供增量构建复用。"""
+    grouped: dict[str, list[dict]] = {}
+    if not INDEX_FILE.is_file():
+        return grouped
+    with INDEX_FILE.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            grouped.setdefault(row.get("s", ""), []).append(row)
+    return grouped
+
+
+def build_index(quiet: bool = False, force: bool = False) -> dict:
+    """Rebuild the flat index, reusing sessions whose file fingerprint did not change.
+
+    39 个会话全量重解要 2.5s，而通常只有 1-2 个在动。所以按「文件指纹」复用：
+    没变过的会话直接抄旧索引行，只重解变过的那些。
+    """
     if not SESSIONS.is_dir():
         return {}
 
@@ -112,62 +154,92 @@ def build_index(quiet: bool = False) -> dict:
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
+    old_meta = {} if force else _read_meta()
+    old_files = old_meta.get("files") or {}
+    old_rows = {} if force else _load_index_grouped()
+
+    new_files: dict[str, dict] = {}
     count = 0
+    reused = 0
+    rebuilt = 0
     tmp = INDEX_FILE.with_suffix(".jsonl.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as out:
         for path in files:
-            session_id = path.parent.name.replace("session-", "")[:8]
-            for record in iter_records(path):
-                kind = record.get("type")
-                if kind == "user/message":
-                    if not is_real_user_message(record):
+            dir_name = path.parent.name          # session-<uuid>
+            session_id = dir_name.replace("session-", "")[:8]
+            fp = _fingerprint(path)
+            prev = old_files.get(dir_name)
+            cached = old_rows.get(session_id)
+            if (not force and prev and cached is not None
+                    and prev.get("mtime_ms") == fp["mtime_ms"]
+                    and prev.get("size") == fp["size"]):
+                for row in cached:
+                    out.write(json.dumps(row, ensure_ascii=False) + "\n")
+                rows_here = len(cached)
+                reused += 1
+            else:
+                rows_here = 0
+                for record in iter_records(path):
+                    kind = record.get("type")
+                    if kind == "user/message":
+                        if not is_real_user_message(record):
+                            continue
+                        role = "u"
+                    else:
+                        role = "a"
+                    text = message_text(record)
+                    if not text.strip():
                         continue
-                    role = "u"
-                else:
-                    role = "a"
-                text = message_text(record)
-                if not text.strip():
-                    continue
-                # turn/step 在 record['data'] 里（不在消息文本里）。
-                # 有它才能"回到那一刻"——按轮次定位，而不是只能按时间取尾巴。
-                data = record.get("data") or {}
-                row = {
-                    "t": record.get("time"),
-                    "s": session_id,
-                    "r": role,
-                    "x": text,
-                    "turn": data.get("turn"),
-                    "step": data.get("step"),
-                }
-                out.write(json.dumps(row, ensure_ascii=False) + "\n")
-                count += 1
+                    # turn/step 在 record['data'] 里（不在消息文本里）。
+                    # 有它才能"回到那一刻"——按轮次定位，而不是只能按时间取尾巴。
+                    data = record.get("data") or {}
+                    row = {
+                        "t": record.get("time"),
+                        "s": session_id,
+                        "r": role,
+                        "x": text,
+                        "turn": data.get("turn"),
+                        "step": data.get("step"),
+                    }
+                    out.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    rows_here += 1
+                rebuilt += 1
+            count += rows_here
+            new_files[dir_name] = {**fp, "rows": rows_here, "session": session_id}
 
     tmp.replace(INDEX_FILE)
     meta = {
+        "version": MANIFEST_VERSION,
         "built_at": int(time.time() * 1000),
         "sessions": len(files),
         "messages": count,
         "newest_session_mtime": max((p.stat().st_mtime for p in files), default=0),
+        "files": new_files,
     }
     META_FILE.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     if not quiet:
-        print(f"索引已重建：{count:,} 条消息 / {len(files)} 个会话，用时 {time.time() - started:.1f}s")
+        print(f"索引已更新：{count:,} 条消息 / {len(files)} 个会话"
+              f"（复用 {reused} 个、重建 {rebuilt} 个），用时 {time.time() - started:.2f}s")
     return meta
 
 
 def index_is_stale() -> bool:
+    """逐文件比对指纹：新增、变大、改过都算 stale；只是 mtime 排序变了不算。"""
     if not INDEX_FILE.is_file() or not META_FILE.is_file():
         return True
-    try:
-        meta = json.loads(META_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    meta = _read_meta()
+    known = meta.get("files")
+    if not known:
         return True
-    files = session_files()
-    if not files:
-        return False
-    newest = max(p.stat().st_mtime for p in files)
-    return newest > float(meta.get("newest_session_mtime") or 0)
+    for path in session_files():
+        prev = known.get(path.parent.name)
+        if not prev:
+            return True
+        fp = _fingerprint(path)
+        if prev.get("mtime_ms") != fp["mtime_ms"] or prev.get("size") != fp["size"]:
+            return True
+    return False
 
 
 def load_index() -> list[dict]:
@@ -435,7 +507,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="also match assistant replies")
     parser.add_argument("--limit", type=int, default=20, help="stop after N hits (default 20)")
     parser.add_argument("--days", type=float, default=0, help="only messages from the last N days")
-    parser.add_argument("--build", action="store_true", help="force rebuild the index, then exit")
+    parser.add_argument("--build", action="store_true", help="update the index, then exit")
+    parser.add_argument("--force", action="store_true", help="ignore the reuse cache and re-parse every session")
     parser.add_argument("--list", action="store_true", help="list every session (time / id / messages / size / first user line)")
     parser.add_argument("--show", metavar="ID", help="print one session's turns (default last 40; combine with --limit / --head / --at / --around)")
     parser.add_argument("--head", action="store_true", help="with --show, start from the first turn instead of the last")
@@ -462,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                         head=args.head, at=args.at, around=args.around)
 
     if args.build:
-        build_index()
+        build_index(force=args.force)
         return 0
 
     if not args.keywords:

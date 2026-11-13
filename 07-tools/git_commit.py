@@ -1,5 +1,10 @@
 """通用 git 提交：中文 message 走 UTF-8 文件 + commit -F，避免 GBK 转码。
 
+⚠️ 本文件**未被 `lab commit` 调用**——`lab commit` 的真实实现在 `tools/lab/lab.py` 的
+   `cmd_commit`（约 :624）。本文件是独立 CLI，只有手动 `py tools/lab/git_commit.py ...` 才走这里。
+   改提交行为（selfcheck / bundle / 未跟踪文件检查）请改 lab.py，别只改这里——
+   2026-11-11 已经因为这个坑浪费过一轮：改了本文件，跑 lab commit 毫无变化。
+
 为什么需要它：`git commit -m "中文"` 在 Windows 上会被按 GBK 转码，
 终端看着正常，`git cat-file commit HEAD` 出来的是乱码——判据永远是原始字节。
 
