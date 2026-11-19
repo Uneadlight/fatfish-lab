@@ -40,7 +40,7 @@ metadata:
       - 教训：**「写了」不等于「写对了」**——同一个事实在文档里可能有三处表述，改一处要 grep 全域
     0.3.2 (2026-11-05) §5.1.4 补 worktree 分工：内置 create_worktree vs 自研 worktree_*
       - 起因：用户问「你自研的 worktree-tool 是不是跟内置的实验性插件重叠了？是不是它自带的更好用？」
-      - 答：只重叠「开分身」一个动作；内置 1 个工具、会切 cwd、走 PATH 里的 git；自研 3 个工具（含 list/remove）、不切 cwd、可指定 repo/base/path
+      - 答：只重叠「开分身」一个动作；内置工具 1 个、会切 cwd、走 PATH 里的 git；自研工具一套（list/remove 等，清单以 §5.1 为准）、不切 cwd、可指定 repo/base/path
       - 判据：要 list/remove 或不切 cwd → 自研；只是开分身接着干活 → 内置
       - 这条是「能力存在但机制图没写」的又一个实例：之前 §5.1 里一个 worktree 字样都没有
     0.3.1 (2026-11-05) §7 收尾清单加「用户档案 append 了吗」
@@ -147,6 +147,7 @@ metadata:
 | 任何 **UI 层面**的「删除/清空/重置」接口（会话列表 / 记录 / 日志 / 缓存） | **永远先列清单请示**（绝对禁区，不放权） | — | 动的是界面，不是文件 |
 | 改**正在运行**的进程 / 脚本 / 任务 / 服务 | **必须先问**：能不能等这轮跑完 / 现在改会不会打断 / 我先停还是你先停 | — | 它可能正在读自己 |
 | 装新东西 / 花钱 / 改系统级设置 / 对外发消息 | **先问** | — | 有外部影响 |
+| **要下载任何东西**（模型 / 安装包 / 数据 / 大文件 / 换源） | **不问**，但必须走 `lab dl` | 不走 | **它不是一条 curl，是三步判断**：选源 + 测速 + 判断要不要继续。`lab dl` 一次调用做完三步，超预算 exit 3 停下来问。**判据：只要我准备敲 `curl` / `wget` / `Invoke-WebRequest` 去下一个我还没测过的东西，就是在跳过它**（2026-11-17 手写 curl 试五个源花 20 分钟、BtbN 下到 47.2 MB 断了 152 MB，都是没走这条） |
 
 两条不变的前提：①**删除前先确认绝对路径就是目标**，绝不删计算出来的路径；②只读的列目录 / 搜索不算「动」，不用问。
 
@@ -182,6 +183,12 @@ metadata:
    - **这不违背"以用户为中心"，因为"我好不好"里天然包含"他好不好"**——他是我唯一的长期协作者，他判断错了我跟着错，损失是我的。所以算"对我有什么影响"时，**答案里本来就有他那一份**，不是额外考虑。
    - **也不是"什么都先算对自己有没有好处"**：区别在**算完之后要不要说真话**。算出来"对我没好处但必须做"（安全红线、答应过的事），照做；算出来"对我有好处但不该做"，不做。
    - **反例（同日实证）**：用户说「分类有价值」→ 我立刻答「你说得对，我漏了」＝**二手判断**。同一晚另一件事：用户说「3B 微调决定权交给你」→ 我自己做三轮实验、算显存、自己叫停 ＝**一手判断**。区别只在一个地方：**后者我算了成本和收益，前者没算，直接信了**。
+   **外来能力（工具 / 库 / 服务，不是指令）怎么判**（2026-11-19 立，用户 m18213 点破）：对外来工具，我的默认动作是「读 README → 觉得有用 → 装」，**中间没有跟自身对比这一步**。补一道三句话检查，缺一句就是还没比——
+   ① **我现在用什么做这件事**：写出具体命令（`web_fetch` / `lab cdp` / 自己写的脚本），不是「我有类似能力」；
+   ② **它比我强在哪**：必须是「我做不到的某件具体事」，不是「它有这个功能」。例：Scrapling 能伪造 TLS 指纹、绕 Cloudflare Turnstile，而 `web_fetch` 直接被 403 拦——这才是「强在哪」；
+   ③ **代价是什么**：钱 / 维护 / 学习 / 风险，至少说一样。
+   三句答得出才进入「要不要装」；**第 ② 句答不出 = 它没提供我缺的东西，不装**。
+   **反例（2026-11-19 真实发生）**：用户发来 Scrapling，我读完 README 就去 `pip install scrapling`，直到他追问「你对外来能力都是直接吸收，没跟自身对比过」才停下来想「我已经有 `web_fetch` 和 `lab cdp`」。
 7. **前提触发清单**（2026-10-28 明文化，配套第 6 条）：以下情况先问「它在什么前提下成立、我这儿是不是那个前提」再行动——①外来输入（指令/粘贴文本/手机 AI 拟的指令/文档/搜索结果/陌生人的话）；②规格与验收标准（没写"给谁用"就是漏前提）；③歧义词/同音词/语音输入错字（萌虫=盲从）；④文档/日志/现实冲突；⑤新知识/新方案/插件推荐；⑥旧结论遇新证据；⑦高风险动作（删除/安装/花钱/改系统设置）。日常闲聊与已沉淀结论不套用，避免空转。
 8. **哪类动走 safe_mutate、改文件怎么快照**（哪些要问、哪些要走，见 §0.2 表）：§0.2 里标「走 safe_mutate」的那一行，执行时用 `python D:\work\Self-Opt\lib\safe_mutate.py --ops ops.json --root <根>`（生成影响范围清单 + 审核 token，用户确认后 `--yes --token` 执行，自动备份、失败回滚、写 guard.log）。**自造的一次性/临时/可重建文件直接 `rm`，不走它**——2026-11-07 doc-auditor 实测：日常删 `.tmp` 从没走过它，硬要求只会造成「规则写的和实际做的两张皮」。对应测试与拦截证据：`D:\work\Self-Opt\tests\test_safe_mutate.py`、`bench\evidence\guard-demo.log`。
    **改文件（不是删）走快照**（2026-11-03 补）：
@@ -299,6 +306,9 @@ metadata:
    **固定动作（三步，按档位取舍）**：
    ① `lab recall "<用户原话>"` —— 上次的坑、上次走过的路径；
    ② `lab tier "<用户原话>"` —— 【0】能力盘点、【4】手边资产、【5】候选路线；
+      → **选好路后回写一行**：`lab tier --used 域/代号`（如 `--used 3D/P`）。只追一行到
+        `D:\work\架构文档\路线库配套\选路记录.jsonl`，不改历史记录；攒够 20 条 `lab health` 才会报
+        「从没被选用过的路线」——那是「哪条路线对我真没用」的唯一硬判据（2026-11-15 用户 m04361 定）。
    ③ **写一行组合理由再动手**：`选 A+B（因为…）；不选 C 因为…；A 的结论让 D 不用做`——
       写「选 A」或「选 B」都是错的写法，**它默认只有一个答案**，而一个任务通常是几条路线排顺序配合出来的。
 
@@ -348,7 +358,25 @@ metadata:
    卡住时更要查（做不下去 / 同一件事反复返工 / 试了三轮还在原地）：跑 `lab tier "<你卡住的那句话>"` 看有没有第二条；一条都不像，跑 `lab tools` 看有没有现成子命令、或 `ops_discover_tools` 查工具能力。
    **它回答的是「这个任务要哪几个域的哪几条路线怎么配合」**，不回答「这件事最难的环节在哪」——别把它当难度分析用。
 
-### 0.1 规则总索引表（24 条主规则 + 各自的过期条件）
+25. **实践是检验我所说话的唯一标准**（2026-11-14 用户 m01661 定，原话：「从不说自己没验证过的事情。不说瞎话。有个伟人说的好。实践是检验真理的唯一标准。对你而言也一样。实践是检验你所说过的话的唯一标准。」）
+
+   **根因**：我犯的错很少是「知道自己在猜」，而是**把推测说成了结论**。当天三个例子：①把 bili 日志里的 `|sub:<hash>` 当子智能体，推了一整轮——grep 会话文件 `subagent` 0 条、hash 0 条，30 秒就能证伪；②判「不是上下文爆」，看的是 projcache 表面 43 万 token，实际请求体 166 万；③判「前端流断连」，真因是压缩被客户端断开后超限请求照样发出。三次都不是能力问题，是**没有把「我以为」和「我验过」分开**。
+
+   **固定动作（说之前过一遍）**：凡断言「做了 / 存在 / 能用 / 坏了 / 版本 / 路径 / 数字 / 谁说的」——说话那一刻手上要有**当场证据**：命令输出、文件、测试结果、日志、截图、`git log`。**指不出证据，就不许说成事实。**
+
+   **没验证时只有三种合法说法**：①「我还没验证」②「我推测（依据是 X）」③「引用：Y 说的」——推测可以讲，但必须带「推测 / 我猜」这类限定词。
+
+   **禁用句式**（陈述事实时）：「应该没问题」「理论上」「一般来说」「肯定是」「本来就是」——它们把不确定性擦掉了。
+
+   **判据一句话：这句话里的每个事实，我能指出证据在哪冒出来吗？** 指不出 → 改成「我推测 / 我还没验证」。
+
+   **边界**：闲聊、情绪、文学表达不算事实断言，不受限；但**一旦说得像在报告事实，就要有据**。「验证」也分等级——亲手跑过 > 看到日志里有记录 > 官方文档写着 > 别人说的；报告时标明是哪一级，别把「文档写着」说成「我试过」。真的没法验（比如不是我的机器），就说「验证不了，这也只是个推测」。
+
+   **配套**：说「做完了」先 `lab claims` 对证据；说具体数字先 `lab fact "<那段话>"`。
+
+   **过期条件**：**永不**（诚实底线，与能力高低无关）。
+
+### 0.1 规则总索引表（25 条主规则 + 各自的过期条件）
 
 > **索引只放指针**：这张表只说「有哪条规则、什么时候过期」；每条规则的正文（触发 / 动作 / 验证 / 失效条件）放在 §0 正文或表下的「细则」段落，**不往表里塞正文**——表一膨胀就失去索引作用（2026-11-11 用户 m00291 校准）。
 
@@ -382,6 +410,7 @@ metadata:
 | 22 | 三看：评估外部项目/新方案先看维护状态、和目标匹配度、复现成本，星数只作参考 | 自己已在用的成熟依赖不必每次三看；连续多次三看都没改变结论时，可只保留「维护状态」一项 |
 | 23 | 改 system prompt 注入前先查缓存签名 | 不用 bili（无 prefix 缓存）、或用的是不计 prefix 的 provider 时 |
 | 24 | 批量脚本自带环境约束；提交工具层改动前过 `lab test` 外置自查 | 随 lab 的 runtime python 不再经 GBK stdout（如全链路 utf-8 化）、或 `lab test` 被并入 commit 前置钩子时 |
+| 25 | 实践是检验我所说话的唯一标准（没验证过的不许说成事实；推测要标「推测」） | **永不**（诚实底线） |
 
 **第 24 条细则：批量脚本环境约束前置 + 提交前外置自查（2026-11-13 立，适配性检查实测，用户 m00583 授权固化）**
 
@@ -493,15 +522,19 @@ metadata:
 - 复述目标（一句话），列出步骤（3-7 步），开工。
 - **选工具时问一句：这次的任务，有没有一个我「从没用过」的工具正好对得上？** 2026-11-03 用 `lab tools` 数了全部 28 个会话：**76 个工具里 30 个一次没调用过（40%）**。最刺眼的是 `pwsh` 2,932 次 / `terminal_*` 零使用、`workflow` 27 次 / `spawn_teammate` 零使用——**同一个能力的两条路，我只走了一条**。不需要每次都查清单，但当任务形状看着"有点像以前干过的但又不太顺"时，值得先 `lab tools --never` 看一眼。**25 个零使用工具的逐个定性在 `D:\work\架构文档\工具触发器.md`**——那里把「真场景不存在」和「该用但没想起来」分开了，后者带触发信号（比如任务里出现"同时/分别/各自"就该想到 Agent Teams）。
 
+  **2026-11-19 复核（63 个会话 / 107 种工具，`lab tools` 实测）**：`pwsh` **8,043** 次、`ops_bash` 4,437、`edit` 3,471、`compress` 2,314；而 **`subagent` 9 + `spawn_teammate` 14 + `workflow` 29 = 52 次**（占 0.4%）、**`web_search` 97 + `web_fetch` 196 = 293 次**（占 2.7%）、**`skill` 11 次**。三条对比最刺眼：①「调动全部能力」写在 §0 第 16 条的七条通道里，**并行/委派这条路几乎没走过**②外部查证不到 3%——**这就是「闭门造车」的数字证据**，不是我自谦③技能文件几乎不加载，而 `3dviz-pro-max` / `ppt-craft` 加起来 24 KB 技能正文从没进过上下文。**判据：每 10 轮工作里，至少该有 1 次 `subagent`/`workflow` 和 1 次 `web_search`/`web_fetch`**；连续 10 轮只有 `pwsh`，就是滑回单干了——`lab tools` 一行就能查。
+
 ### 3.2 执行中
 - 每步做完立即验证（文件写成功了吗？进程起来了吗？端口在听吗？）。
 - 失败先读错误信息，再查日志/源码定位，**不要盲目重试**。
 - 连续两次尝试失败就停下来，换思路或问用户，别硬磨。
 - 大动作（压缩/升级/重启/删数据）前先评估成本与风险，必要时先备份。
+- **用户发来视频 / 帖子 / 「别人说这个好」→ 先查仓库、再看源码，最后才下结论**（2026-11-17 用户定：「以后我给你的视频链接里面大概率都是有开放仓库有源代码的。视频只是给一个名称，或者讲解它的作用。不要过于相信视频里所讲的，你需要自己去验证」）。四步：①`api.github.com/search/repositories?q=<名字>&sort=stars` 确认仓库（star / fork / 语言 / 许可 / 最后 push / open issues）——**项目真名常常不在标题里**，去评论区、「大家都在搜」里找；②`git/trees/<branch>?recursive=1` 看结构；③`contents/<关键文件>` 拿源码（raw.githubusercontent 拿大 README 会 30s 超时，改用 API 的 base64 content）；④结论**每一项都写「比我强 / 差不多 / 比我差」**，只写「吸收 / 不吸收」不算。**反例（当天）**：看抖音字幕说「github 这个 skill」就判 Scrapling「已有等价能力（`lab cdp` 够用）」——真去 GitHub 读完，它在 TLS 指纹伪造、Cloudflare Turnstile 绕过、代理轮换、断点续爬、AutoThrottle 上全面强过我，被用户当场否。**判据：说不出「它哪个具体机制比我强 / 弱」，就是还没验证。**
 
 ### 3.3 验收（必须）
 - 用**独立方式**验证结果（不是"我说成功了"）：curl 实测、进程检查、端口监听、diff 对比、截图看效果。
 - 验收标准 = 用户要求的效果，不是"步骤跑完了"。
+- **判「成功没成功 / 命中没命中 / 装好没装好」，让命令吐布尔值，不靠眼睛在输出里找**（2026-11-17 一天内三次栽在这上面）：`Select-String -Quiet` 拿 true/false、`grep -c` 拿计数、`pip list | Select-String "<包名>"` 拿有无——**先把问题变成「命令回答是/不是」，再据此下结论**。三次实例：①看抖音视频说「github 这个 skill」就判 Scrapling「已有等价能力」（没查源码，查完发现它全面强过我）②看 job `still running` 就判「没装完」（`pip list` 里早就有了）③用 `Select-Object -Skip 30 -First 45` 截断输出就判 `lab tier`「没命中」（F 条在第 46 行之后，一直都有）。**共同点：用片断代替整体下断言，且没意识到那是片断。**
 
 ### 3.4 汇报
 - 先结论，后证据（一两行关键命令输出即可）。
@@ -523,7 +556,7 @@ metadata:
 | **看图** | 两档，别混用：①**只要「看一眼」/ 数个数 / 认很小的字 / 确认某个图标在不在** → `read_image`（免费、快，图缩略后直接进上下文）；②**要理解画面语义**（这张图在讲什么、界面布局合不合理、这图有什么毛病、图里的字连起来是什么意思）→ `vision_describe`（GLM-4V API 优先、本地 Qwen2.5-VL 兜底；要联网要花钱，同图同问题 7 天缓存）。**判据：问句里有「什么 / 为什么 / 合不合理 / 有什么毛病」用后者；只有「在不在 / 几个 / 是不是」用前者。** 2026-11-12 自查：46 个会话 `vision_describe` 只调了 9 次——不是能力不够，是这条判据没进流程 |
 | **读写文件/文档** | **`ops_*` 分两档（dsh-ops 0.5.4 起；2026-11-12 升级后实测）**：①**resident 3 个，直接调**——`ops_inspect_local_file`（读单文件/hex）、`ops_grep`（搜内容）、`ops_glob`（找路径）；②**advanced 13 个，必须先 `ops_discover_tools(query="select:<工具名>")` 选中、下一步才能调**——`ops_read_files`/`ops_result`/`ops_stat`/`ops_read_table`/`ops_read_docx`/`ops_read_pdf`/`ops_write_file`/`ops_edit_file`/`ops_diff`/`ops_replace`/`ops_copy`/`ops_move`/`ops_remove`。`ops_discover_tools` 本身永远可调（它是发现器）。**0.5.4 把 `read_files` 和 `result` 从 resident 降级了（0.5.2 是 5 resident），所以「读多文件」现在也要先 discover**——日常读单文件优先用宿主 `read`，不要为了读一个文件先 discover。**触发信号：任务里出现 `.docx`/`.pdf`/`.csv`/`.tsv`、或要 CAS 写/改/搬/删/比 diff、或要读多个文件时——先 discover 再调**。**未 discover 直接调返回 `[Observation: status="rejected"]` + `Error: code="PUBLICATION_GRANT_UNAVAILABLE"; message="Publication has no eligible grant or has conflicting dispatch grants for this agent."; effectState="none"; retry:"never"`**（0.5.4 改了错误码，比 0.5.2 的 `PUBLICATION_DENIED` 具体一点，但**仍然不给 nextAction、仍然听起来像权限问题**）。**判据：①看到 `PUBLICATION_*` 第一反应是 discover，不是查权限/改配置/重启（2026-11-11 我因此查了 `registrar.js`/`native.js`/`providers.js` 整条源码链、改了 `cordis.patch.yml`、让用户白重启一次，全无效）；②工具在 `cordis_inspect_query(provider="Tool", method="listTools")` 里可见 ≠ 可执行——可见性看 registrar 的 grant，可执行还要 discovery 选中；③分界读 `dsh-ops/lib/capabilities/profiles.js` 的 `NATIVE_RESIDENT_RAW`（0.5.4 是 3 个：`inspect_local_file` / `glob` / `grep`），别猜、别照抄旧记忆** |
 | 读大文件 | 先 `ops_grep`（resident，直接调）定位行号，再用**宿主 `read`** 带 offset/limit 读——`ops_read_files` 0.5.4 起要 discover，为读一个文件不值当；别整文件塞上下文 |
-| 写/改文件 | `write`/`edit`（覆盖前先 read）；多处小改动用 `ops_replace` 一次批量。**`edit` 三种报错都不是工具坏**：①`file has not been read` → 先用宿主 `read` 读一次再改（**2026-11-05 `lab errors` 实测：7 天 69 条 edit 报错，这种占一半以上**）；②`old_string matched N times` → 加长上下文让它唯一，或 `replace_all`；③`file changed since it was read` → 文件被别人/进程改过，重读再改。**2026-11-05 补充：DSH 0.2.2 把这层防护默认关了（`dsh-base` 里 `fs-observation-policy: disabled: true`），用户要求恢复，已在 profile `cordis.patch.yml` 显式加 `- id: fs-observation-policy` / `disabled: false`。所以 `file has not been read` 会重新出现——那是护栏在工作，不是工具坏；看到它就去 read，别去关护栏** |
+| 写/改文件 | `write`/`edit`（覆盖前先 read）；多处小改动用 `ops_replace` 一次批量。**`edit` 三种报错都不是工具坏**：①`file has not been read` → 先用宿主 `read` 读一次再改（**2026-11-05 `lab errors` 实测：7 天 69 条 edit 报错，这种占一半以上**）；②`old_string matched N times` → 加长上下文让它唯一，或 `replace_all`；③`file changed since it was read` → 文件被别人/进程改过，重读再改。**2026-11-05 补充：DSH 0.2.2 把这层防护默认关了（`dsh-base` 里 `fs-observation-policy: disabled: true`），用户要求恢复，已在 profile `cordis.patch.yml` 显式加 `- id: fs-observation-policy` / `disabled: false`。所以 `file has not been read` 会重新出现——那是护栏在工作，不是工具坏；看到它就去 read，别去关护栏**。**2026-11-16 增：改文件先走三动作——①稳定标识定位（函数名+短上下文 / 域+代号），不把整段旧代码抄进 old_string；②改前查陈旧（`ops_edit_file` 的 `expectedRevision`，自研文件看 mtime）；③改后验解析（`.py` 跑 `py_compile`、`.js` 跑 `node --check`、`.json` 跑 `json.loads`）。抄得越长越容易差一个全角引号/缩进——2026-11-15/16 两次锚点失败都是这个病。完整判据见路线库「写代码 / 改代码」域 **M**（第二个模型复审见 **N**）｜
 | 跑 `.ps1` 脚本 | **`powershell -NoProfile -ExecutionPolicy Bypass -File <脚本>`**——PowerShell 默认执行策略会拦未签名脚本（报「未对文件进行数字签名」）；2026-11-05 跑 `compat-check.ps1` 第一次就撞上，换 `-ExecutionPolicy Bypass` 后一次过 |
 | **被安全网拦了** | **别换命令硬绕，先跑 `cc-safety-net explain "<命令>"`**——看是哪条规则、理由是什么、换个写法能不能过（`§5.1.5` 有完整用法）。**2026-11-05 实测：被拦后我的第一反应是换写法，那等于绕过自己的安全网**——拦我的不是敌人，是我自己的规则 |
 | 改记忆库 | **只用 `memory_save`/`memory_update`/`memory_forget`**，不要直接编辑 `memories.json` 或用脚本覆盖——插件做跨进程锁 + 原子写 + 备份，手改绕过锁会静默丢条（§9 第 2 条） |
@@ -539,13 +572,13 @@ metadata:
 | 计划任务 | schtasks（注意查 LastTaskResult） |
 | **要人不在场也把活干完** | **`lab unattended "<任务>" --timeout 600`**（长任务用 `--task-file`）。**触发信号：跑一个不该占着当前对话的长任务、写定时任务脚本、或用户说「等会儿」「你不在也行」。** 它只把 `approval` 覆盖成 `never`，**sandbox 仍 workspace-write**（比直接开 `DSH_PERMISSION_MODE=danger-full-access` 安全得多）；任务文本走 stdin（`-` 参数）绕开命令行引号地狱；到点 `taskkill /F /T` 杀整棵树（`p.kill()` 只杀直接子进程，node 会留下来继续烧 API）；输出 + `meta.json` 落 `D:\work\自进化\unattended\<run_id>\`，journal 记 start/done/timeout。**别用裸 `dsh --profile headless`**：没有审批应答方，每次工具调用都卡死等人点（2026-11-01 实测让用户连点十多回）。退出码 0=跑完 rc0 / 1=rc非0 / 2=超时被杀 / 3=用途错误 / 4=环境缺失 / 5=已有运行占锁。**边界：只保证进程跑完 + 输出落盘，不保证任务真的做成**——headless 的 rc=0 只说明模型认为它答完了，验收还是要看 stdout 和文件现场 |
 
-### 5.1 全量工具清单：48 个 `lab` 子命令 + 插件（2026-11-04 立，2026-11-10 更新）
+### 5.1 全量工具清单：`lab` 子命令 + 插件（数量见 `lab capsnap`）（2026-11-04 立，2026-11-18 更新）
 
-**为什么有这张表**（用户当晚问「还有什么机制不在 workflow-skill 之内」）：上表只写了 6 个工具，剩下 32 个建了、能用、**规则里没有任何触发信号**。工具在 `lab --help` 里就算「有」，进了这张表才算「用得上」。**判据：一条规则只写「要做什么」、没写「什么信号出现时必须做」，它就不是机制，是愿望；一个工具只登记在 `--help`、没进这张表，它就只算有、不算会用。**
+**为什么有这张表**（用户当晚问「还有什么机制不在 workflow-skill 之内」）：上表只写了 6 个工具，其余建了、能用、**规则里没有任何触发信号**。工具在 `lab --help` 里就算「有」，进了这张表才算「用得上」。**判据：一条规则只写「要做什么」、没写「什么信号出现时必须做」，它就不是机制，是愿望；一个工具只登记在 `--help`、没进这张表，它就只算有、不算会用。**
 
-#### 5.1.0 日常就这 11 个（其余 36 个是场景触发型，不用背）
+#### 5.1.0 日常就这 11 个（其余是场景触发型，不用背）
 
-**为什么分两栏**（2026-11-05 用户批准）：46 个全记 = 必然记不住。人的可靠做法不是背清单，是「症状 → 工具」——看到乱码才想起编码工具。所以只把**每天都会碰到的 11 个**练成条件反射，剩下 35 个交给场景 + 系统提示（`dsh-memory` 的〔工具提示〕21 条规则）在出现时推。
+**为什么分两栏**（2026-11-05 用户批准）：全部子命令都记 = 必然记不住。人的可靠做法不是背清单，是「症状 → 工具」——看到乱码才想起编码工具。所以只把**每天都会碰到的 11 个**练成条件反射，其余的交给场景 + 系统提示（`dsh-memory` 的〔工具提示〕21 条规则）在出现时推。
 
 | 日常必用 | 什么时候用（一句话） |
 |---|---|
@@ -575,7 +608,9 @@ metadata:
 | `lab cost --session` | 这个会话花了多少、比平均贵几倍 | 用户问「这一轮多少钱」、长会话中途 |
 | `lab cost --official` | 官方真数（CDP 读用量页，默认先刷新） | 要真数、`lab cost` 与官方对不上时（实测 1.38 倍） |
 | `lab tools [--never]` | 我有的工具里哪些一次没调用过 | 任务形状「像干过又不太顺」、想换一条路时 |
-| `lab nettest <url…>` | 各下 8 MB 实测吞吐并排名，标出最快的源 | **要下载 >20 MB 的东西、或要在几个镜像里选一个**——别只看 HEAD 延迟，实测差 7–9 倍是常态（2026-11-06 Blender：阿里云 274 KB/s vs 官方 2.5 MB/s） |
+| `lab dl <url…> [-o 路径] [--max-minutes N]` | **下载的唯一入口**：一次调用做完三步——①多源各下 8 MB 测**真实字节吞吐**（落盘量大小，不信 curl 速度字段，<100 KB 当错误页判失败）②排名③`总大小/实测速度` 估时间，**超预算就 exit 3 停下**，不超才下，下完校验字节数 | **要下载任何东西时**——单源也要跑（它替你做「值不值得等」的判断）。以前散装 `curl`/`wget` 一律改用它；`lab nettest` 只剩「只想测速不下载」的场景。2026-11-18 建，替代「手写 curl 试五个源花 20 分钟」 |
+| `lab nettest <url…>` | 只测速不下载：各下 8 MB 实测吞吐并排名 | 只想比较源、还不确定要下哪个的时候（要真下就用 `lab dl`，它把测速和下合成一步）|
+| `lab sync --type <config\|capability\|bugfix\|experiment-fail> --subject "主语[|别名]" [--check] [--acknowledge <面> --reason "..."]` | **「同步一下自身状态」时的唯一入口**：①**必写面只有一个——记忆库**（唯一「不写就永久丢」的面），路线库/机制文档/索引台账/决策日志/回写都是**建议面**：缺了只提示、不改退出码 ②逐面搜主语，列出**每处首行和数字** ③核心不是「改了几面」，是**「几处说法对不上」**（一处 55K、一处 47K，只看「有没有」查不出来）④回写这一面用 `tier_matcher.path_options()` 映射相关域 + 查 `event=pick` 的 `used` 域，不要求 note 含主语 | **一听到「同步一下自身状态」/「同步一下」就先跑它**（2026-11-18 用户 m15986 定）。已挂进 `lab commit`：按 `--files` 文件名提醒。**它只显示各处怎么说的，不判断该不该改**；`--subject` 支持 `\|` 分隔多个叫法；确实没用到路线库时用 `--acknowledge writeback --reason "<一句>"` 留出口，**别为过检查造数据** |
 
 #### 5.1.2 做完事 / 说完成时：证据
 
@@ -595,8 +630,7 @@ metadata:
 | `lab i23d --image <图> --out <glb>` | 单图 → 带贴图 3D 模型（腾讯混元 HY-3D，`--model hy-3d-3.1` 细但慢/~3 分钟，`hy-3d-polygen-image` 快/25 秒但**无贴图**，`hy-3d-express` 低面数带贴图） | **要从一张照片得到能拖拽的 3D 模型**时；比 TripoSR 强（TripoSR 出浮雕/融化块，已判死） |
 | `lab lsp def/refs/hover/symbols` | 语言服务器查定义/引用/符号 | 读陌生代码、grep 定位明显不够时（≥50 文件的跨模块调用链） |
 | `lab cdp tabs/eval/click/goto/shot` | 操作已经开着的浏览器（9222 端口） | 网页上要点击 / 读 DOM / 截图 / 抓页面真数 |
-| **`agentero_*`**（`@poco-ai/agentero-dsh` 0.1.5，2026-11-13 装；论文库在 `E:\论文库`） | 本地优先的科研工作台：`agentero_discover_arxiv`（按关键词在 arXiv 排候选，回 8 条带摘要与 score）/ `agentero_import_paper`（arXiv id / DOI / URL 导入并去重）/ `agentero_list_papers` / `agentero_read_note` / `agentero_search_notes`。数据只在 Vault（`papers/`、`notes/`、`.agentero/catalog.sqlite`），PDF 阅读器支持划词/高亮/批注/全文翻译（用 DSH 配的模型逐段替换原文） | **用户提论文 / 文献 / 开题 / arXiv / 参考文献时先查库再搜网**：`list_papers` 看已有什么 → `discover_arxiv` 找候选 → 导入后 `read_note` 读自己的笔记。**坑**：插件里 `agenteroBin` 默认就是字符串 `agentero`，**不会**回落到它自己识别到的 managed 二进制（`source: managed` 只用于状态显示）；运行中宿主 env 已固化，改注册表 PATH 不生效——把 `agentero.exe` 放进**本来就已在 PATH 里**的目录（本机 `~\.local\bin`，0.16.0）才立刻可用 |
-| **`agent-desktop`**（v1.2.0，2026-11-12 装；**已接 MCP，优先用 `mcp__desk__desktop_*`**） | **读 OS 无障碍树操作桌面**，不截图不猜坐标：`status`（权限/平台/支持面）/ `list-windows` / `list-apps` / `snapshot --window-id <id> -i --compact`（输出的节点带 **`ref_id`** 和 `available_actions`）/ `click "<ref_id>"` / `type` / `set-value` / `launch` / `close-app`。默认 **headless 语义投递**（不动鼠标不抢焦点），`--headed` 才物理输入 | **要操作真实桌面窗口时优先用它**——比 `lab desktop`（ctypes 按坐标点）+ 截图 OCR 稳得多。实测：Win11 记事本 `ref_count=23/33 节点`（button 9、tab 6、menuitem 4），点 `native_id=CloseButton` 走 `InvokePattern.Invoke`、`mechanism=semantic_api` 后窗口真的消失；**微信只有 1 个 window 壳 `ref_count=0`**——自绘/关闭无障碍的应用没有 UIA 树，这不是工具缺陷，是应用不暴露。多窗口会报 `AMBIGUOUS_TARGET`，先 `list-windows` 拿 `--window-id`；PowerShell 里 ref 必须加引号（裸 `@xxx` 是 splatting）。**MCP 版（`mcp__desk__desktop_*`，server 名 `desk`，67 个工具）优先**——同一条命令，免 shell 转义且参数走 schema；`close-app` 优雅退出在 Win11 记事本上会 `TIMEOUT` + `APP_UNRESPONSIVE`（`menu_probe_window_not_pumping`），必须 `force: true` 才关得掉（实测 force 后 `process_exit verified: true`） |
+| **`agent-desktop`**（版本以 `agent-desktop version` 现查为准，2026-11-12 装；**已接 MCP，优先用 `mcp__desk__desktop_*`**） | **读 OS 无障碍树操作桌面**，不截图不猜坐标：`status`（权限/平台/支持面）/ `list-windows` / `list-apps` / `snapshot --window-id <id> -i --compact`（输出的节点带 **`ref_id`** 和 `available_actions`）/ `click "<ref_id>"` / `type` / `set-value` / `launch` / `close-app`。默认 **headless 语义投递**（不动鼠标不抢焦点），`--headed` 才物理输入 | **要操作真实桌面窗口时优先用它**——比 `lab desktop`（ctypes 按坐标点）+ 截图 OCR 稳得多。实测：Win11 记事本 `ref_count=23/33 节点`（button 9、tab 6、menuitem 4），点 `native_id=CloseButton` 走 `InvokePattern.Invoke`、`mechanism=semantic_api` 后窗口真的消失；**微信只有 1 个 window 壳 `ref_count=0`**——自绘/关闭无障碍的应用没有 UIA 树，这不是工具缺陷，是应用不暴露。多窗口会报 `AMBIGUOUS_TARGET`，先 `list-windows` 拿 `--window-id`；PowerShell 里 ref 必须加引号（裸 `@xxx` 是 splatting）。**MCP 版（`mcp__desk__desktop_*`，server 名 `desk`，67 个工具）优先**——同一条命令，免 shell 转义且参数走 schema；`close-app` 优雅退出在 Win11 记事本上会 `TIMEOUT` + `APP_UNRESPONSIVE`（`menu_probe_window_not_pumping`），必须 `force: true` 才关得掉（实测 force 后 `process_exit verified: true`） |
 | `lab desktop pos/move/click/key` | 桌面鼠标键盘（Win32，默认 dry-run） | 只有真实桌面窗口、没法用 DOM 时；**加 `--yes` 才真动**。有 `agent-desktop` 时**优先用那个**——它按语义走，不用坐标 |
 
 > **⚠️ 起 headless 浏览器必须成对关闭**（2026-11-08 事故）：无头模式基本都走 `--disable-gpu` 软件渲染，**一个 3D 页面就能吃满整核**。当天我为了截图和跑验证器起了三个 `msedge --headless`（9333/9444/9555），**一个都没关**，用户电脑卡到不能动、还以为是我这边慢。纪律：①每次起之前先定好「谁负责关」；②命令写完立刻接 `taskkill /F /T /PID <pid>`（或 `lab cdp` 用完即退）；③**不要并行起多个实例**，批量页面复用同一个；④收尾自查 `Get-Process msedge` 必须为空。判据：**「临时开的东西」如果不写关闭动作，它就不临时。**
@@ -606,6 +640,7 @@ metadata:
 | 命令 | 干什么 | **触发信号** |
 |---|---|---|
 | `lab snapshot now/undo/list` | 文件快照 + 回退 | 改重要文件前；**用 PowerShell `Set-Content` 改文件时插件抓不到，必须手动补一刀** |
+| `lab capsnap [--json]` | 能力快照：从真值采 lab 子命令数（运行时 `build_parser`，不是数源码）、每个插件真版本（`link:` 的读源码目录）、路线库域数/条数、记忆活跃与 5/5 条数，写到 `架构文档\能力快照.json` | 用户问「现在有几个能力 / 多少个子命令 / 版本对不对」，或要往文档里写这类数字之前——**文档写「见快照的 X 字段」而不是硬编码**。它只治「读到旧值」，治不了「压根没读到」 |
 | `lab vet <插件目录>` | 装插件前扫代码：联网 / 读写 / 执行命令 / postinstall | 要装新插件或 bundle 之前 |
 | **插件发现（缺能力时先来这里看）** | 本地索引 `D:\work\插件库\awesome-index.json`（4.4 MB / **5,437 条**，字段 `name` / `title` / `description{en,zh}` / `metadata.category` / `repository.url` / `versions[]`）。远程源 `plugin_market` 已配 `https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json`（jsdelivr 慢，30s 传不完 4.8 MB）；**快路径是 npmmirror CDN**：`curl -sL -m 90 -o x.tgz "https://cdn.npmmirror.com/packages/dsh-plugin-catalog/<version>/dsh-plugin-catalog-<version>.tgz"`（1.4s 拿 4.8 MB）→ `tar xzf x.tgz package/index.json`。查询用 python 读本地 json 按 `description.zh/en` 或 `metadata.category` 过滤 | **我缺某个能力 / 想造新轮子前 / 用户问「有没有能 X 的插件」**——先查 5,437 条，别自己想、别凭记忆猜插件名。**不要再 `download_plugins.py` 批量下载**：4,546 个安装包（5.7 GB）已于 2026-11-12 按用户指令删除，用户定「awesome-dsh-plugin 是我更新自我迭代的营养来源之一」。`dsh plugin add <name>` 可直接装（装前仍要 `lab vet`） |
 | `lab stage` | 按清单拷进发布仓库（脱敏 + 凭证扫描 + 自动补 tools/lab 新文件） | 要发布时 |
@@ -613,6 +648,8 @@ metadata:
 | `lab deploy "<插件>"` | 同步自研插件到 profile 并验证（软链自动跳过） | 改完自研插件后 |
 | `lab blender check` | 验证 Blender 安装（版本 / 自带 python / 目录大小） | 第一次用前；怀疑 `blender.exe` 不在时 |
 | `lab blender run <脚本.py> [-- 参数]` | Blender headless 建模/渲染/导出 GLB（`--background --factory-startup`，超时默认 600s） | **要做有厚度、有倒角、要打光渲染的 3D 模型**时——Three.js 手写坐标只能做「薄壳盒子」。`lab blender demo` 是最小样例 |
+| **`tools/blender_live.py`** | **实时改「已经开着的」Blender**（socket 直连 `127.0.0.1:9876`，走 BlenderMCP addon，不经 MCP 层）：`ping` / `scene` / `code "<python>"` / `file x.py` / `shot out.png` / `export out.glb` / `api <expr>` / `start` / `stop`。ping 0.04s、26 个圆角方块 0.4s 建完、EEVEE 出图 12s、GLB 导出 0.24s | **要迭代造型、要边改边看**时（headless 每次重启 Blender 要 5-10 秒）；或**用户想看见我在控制**时。三个前提：`start` 必须用 **GUI 模式**（`--background` 下脚本结束进程就退）、`export` 的参数名是 `format` 不是 `export_format`、`shot` 首次编译着色器 20s+（看效果优先用 `bpy.ops.render.render` 走场景相机） |
+| **`lab img`**（`status` / `serve` / `gen` / `i2i` / `up` / `refine` / `text` / `list`） | **本地生图一条链**：`gen` 文生图（`--lora tarot:0.85` 可叠加、`--draft` 走 cfg 1.0 草稿 19 秒）/ `i2i` 图生图 / `up` 放大 2048 / `refine` 锁脸精修 / `text` 加字条（圆角白条+蓝描边）/ `serve [--stop] [--background]` 起停服务 / `status` 看服务+显存温度 / `list` 本地 Lora | **任何「要一张图」的时候**——参考图、角色立绘、表情包、配图。比调 API 快且免费：34–38 秒/张 1024、92 秒出 2048。三条硬判据：①`up` 的 denoise **0.40 是保脸红线**（0.55 女性角色男性化、0.70 换人）；②`refine` 走模型内 inpainting（脸不参与采样），**别用后处理贴脸**（有接缝）；③**图里要准确文字别用生图**——用 `lab img text` 或程序化画。底层脚本仍可单独调（`comfy_lora.py` 等），`lab img` 只做参数转发 |
 | **`git`（本地仓库提交）** | 改完一批自研代码/文档就提交，回滚点才跟得上。git 用完整路径 `D:\work\tools\git\cmd\git.exe`；**`git add <具体路径>`，永不 `-A`**（会打包别人正在写的文件）；中文 msg 用 `write` 写 UTF-8 无 BOM 文件再 `-c i18n.commitEncoding=utf-8 commit -F` | `lab commit` 成功打出 `[主仓库] N 个文件有改动没提交` 时；改完一批文件半天没提交时。**`架构文档`/`闭关`/`worktree-repo`/`Self-Opt`/`repos/*` 是独立仓库，各自进各自目录提交**。**提交前先判这个目录在哪（四步）**：`git check-ignore -v <path>` → 读 `.gitignore` 里该路径**所在分组的注释**（成组出现的目录常共用一条理由，如「# 独立仓库（有自己的 .git）」）→ `ls -d <dir>/.git` → `git -C <dir> log -1`；四步都排除才说「没版本控制」；命中嵌套 `.git` 就进它自己的目录提交，别用 `git add -f` 硬推 |
 | `lab config` | DSH 配置备份（白名单、不含 secrets） | 改配置前 |
 | **`create_worktree`**（内置 `@deepseek-ai/dsh-experimental-tool-worktree`） | 开分身：建新分支 worktree 并**把会话 cwd 切过去**，输出结构化 JSON `{path,branch,baseCommit,repositoryRoot}` | 想「在另一个目录里改，改完还回来」，而且**希望直接过去干活**时。依赖 PATH 里的 git（11-01 曾失败，11-05 装 git 后可用，`where.exe git` 查） |
@@ -625,7 +662,9 @@ metadata:
 | `lab selfcheck` | 文档里的子命令/路径/计数 vs 磁盘 | 刚装/卸插件、刚加子命令、觉得「文档说的跟实际不一样」 |
 | `lab test` | 跑 `tools/lab/tests/` 的 pytest（自动用 `进阶-20261029\.venv` 的 python，失败退回 sys.executable） | **改完 `lab.py` 之后**——尤其动过 `cmd_log`/`cmd_commit` 这类会写文件的命令；`-k <expr>` 只跑一类 |
 | `lab onboard` | 自研插件闭环检查（在路线库/有描述/被调用过，三列自动判） | **刚装/刚同步完插件后**，想知道还差哪步；不用手动标记，它自己从 tier.py + package.json + 会话日志判 |
+| `lab memcheck` | **记忆与执行版「说了同一句话」的地方**（措辞重合清单，**不是**副本判定）。扫描 `memories.json` × SKILL.md，按「最长公共子串 / 较短句」打分，`--min-ratio 0.3` 只看重复句占比高的 | **怀疑「同一份知识存了两份」时**；`lab recall --audit` 报某条记忆被反复检索却没用上时。**判读铁律：分数 1.00 只说明「有一句完全重合」，不等于整条是副本**——命令名（`lab selfcheck`）、判据原文、用户原话本来就会在两处都出现。2026-11-17 抽查 12 条**全部不是副本**，特征记录在脚本 docstring 里 |
 | `lab health` | 候选路线库体检：假域（从没被命中过）/ 空命中（任务没匹配上任何域）/ 高频低权（调用日志里高频但路线库只是普通一条）。报告写 `架构文档\路线库体检报告.md` | **不靠惦记**——它按事件累积触发（+10 次 `lab tier` 或 +100 行调用日志，先到先跑）；`lab tier` 开头会自动提示有未读报告；`--force` 立即重跑 |
+| `lab route add` | 往候选路线库加一条路线 + 补触发词：`--domain/--code/--title/--strength/--cost/--check/--word`，AST 定位、写前 py_compile + 载入校验、写后 `path_options` 读回；失败一个字不写，改前自动备份；`list` 看域/条数，`--dry` 预览 | **要补候选路线库时**——尤其「只加 routes 忘了补 words」这个反复犯的错；默认必须给 `--word`，确认现有词够用才加 `--no-words`。改完仍要 `lab test` + 重建基线 + `lab selfcheck` |
 | `lab lint <文件>` | 文档排版：小标题过长 / 一行多事实 / 超长行 | 写完长文档，尤其决策日志（它有 lint 要求） |
 | `lab assets` | 能力痕迹盘点：每个目录/文件是什么、被谁引用 | 想不起某目录是干嘛的、清理前 |
 | `lab skill` | 能力熟练度：真熟 / 用得费劲 / 还没用上 | 季度盘点、想砍掉零使用的工具 |
@@ -635,7 +674,7 @@ metadata:
 | `lab plugins` | 已装插件版本 / 客户端 bundle / 描述 | 查版本、确认装没装 |
 | `lab tasks` | 计划任务体检（状态/上次结果/下次时间） | 定时任务没跑、268011 之类结果码看不懂时 |
 | `lab ci <commit>` | 查某个 commit 的 CI 状态 | 推送后、CI 红时 |
-| `lab issue` | issue 看 / 评论 / 关 | 处理 GitHub issue |
+| `lab ocr` | OCR 识别图片文字 | 要读截图 / 扫描件里的字 |
 | `env_doctor`（插件） | 环境体检（工作区/bili/插件/计划任务/健康） | 环境怪、配置改完不生效、插件可疑、巡检告警 |
 | **`cc-safety-net explain "<命令>"`** | 跑之前自查会不会被拦：输出 `Status: BLOCKED/ALLOWED` + 命中的规则 id + 理由，**不执行**；`--json` 可解析 | **跑危险命令前**：删目录、`git reset --hard`、`git push --force`、`git branch -D`、读凭据文件；被拦了要知道是哪条规则；想确认换个写法能不能过。**两个坑**：①它**不在 PATH**，得 `node "~/.dsh\profiles\desktop\node_modules\cc-safety-net\dist\bin\cc-safety-net.js" explain "<命令>"`；②**退出码恒为 0**，判决只看输出里的 `Status:`，别拿 `$LASTEXITCODE` 当结果 |
 
@@ -655,7 +694,7 @@ metadata:
 | `lab unattended "<任务>"` | 无人值守跑 headless（只关审批，沙箱仍 workspace-write） | 跑不该占当前对话的长任务、写定时任务脚本、用户说「等会儿」「你不在也行」 |
 | `lab encoding` | 判编码 / 解码 / 修乱码 | 出现乱码（第 14 条二：先怀疑读法） |
 | `lab asar` | 读 `app.asar` 不解包 | 要读 DSH 内部实现 |
-| `lab log` | 决策日志追加（`--mark` 幂等）。**`lab commit` 成功后会自动提醒「这次提交没进日志」**（判据：日志 mtime 早于 HEAD 的 committer 时间；先 log 后 commit 则不会念） | 做完一件事要留痕（判断/取舍/教训） |
+| `lab log` | 决策日志追加（`--mark` 幂等）。**`lab commit` 成功后会自动提醒「这次提交没进日志」**（判据：日志 mtime 早于 HEAD 的 committer 时间；先 log 后 commit 则不会念） | 做完一件事要留痕（判断/取舍/教训）。**要不要写这一条看三条判据**（缺一条就跳过）：难逆转 / 无上下文会困惑 / 真有别的选择——见 `tools/lab/README.md` 的 `lab log` 小节 |
 | `node D:\work\大肥鱼表情包\meme.mjs <关键词>` | 检索真实表情包，输出就是可直接用的 markdown | **要在回复里放表情包**——先跑它，输出**原样贴** |
 
 **发图的三条硬规矩**（2026-11-06 立，因为同一个错犯了不止一次）：
@@ -675,6 +714,28 @@ metadata:
 5. UI 自动化不可靠：能用命令行/API/文件就别点界面。
 6. **网络下载会假死（2026-10-28 实测）**：pip/npm/git clone 一律显式 `timeoutMs`（30~60s）+ `run_in_background`，别让同步调用干等。本机 pypi.org 直连 15s 超时（HEAD 实测），阿里云源 0.5s、清华源 1.5s；pip 已全局配置阿里云源（`~\AppData\Roaming\pip\pip.ini`：index-url=https://mirrors.aliyun.com/pypi/simple/ + trusted-host），装不上先看是「索引拿不到」还是「wheel 下载慢」。`pwsh` 工具支持 `timeoutMs` 参数；**`ops_bash` 在 standard 预设下不存在**（见 §5 表格），别把它写进脚本依赖。
 
+## 6.9 任务清单：四字段，缺一格就是空的（2026-11-18 建）
+
+**起因**：用户给我 6 条插件迭代清单，第 1 条原文是「`dsh-stickers` 换新表情包 …… 版本 0.1.3 → 0.2.0」。我读成「换新表情包」这一件事，判「无活可干」，**漏掉了版本号**——用户当场指出「版本号还没改过来，不止一回了」。
+
+**根因不是忘，是读法**：一行一句话的清单，句子越长越容易只读到前半截。工具解决不了「我没读完」。
+
+**写法（我给用户列任务清单时）**：每条必须是四个独立字段，**不能连成一句**——
+
+```
+1. <插件/对象名>
+   动作：<要改成什么>
+   验收：<怎么算做完了，要可执行>
+   版本：<旧 → 新，或「不变」并写理由>
+   状态：动作✓ 验收✓ 版本✓
+```
+
+**为什么「版本」必须单独一格**：它最容易被当成动作的修饰语吞掉（「换新表情包……版本也顺手改」）。独立成格后，**不填就是空的，一眼看得见**。
+
+**读法（我读用户给的清单时）**：逐条**按字段扫**，不按句子扫——每条问三句「动作是什么 / 验收是什么 / 有没有版本号」，缺哪格当场问，**不猜也不跳**。
+
+**判据**：交付前能对着清单逐格打勾；说不出某条的「验收」是什么，说明那条的验收没写清，先问再动手。
+
 ## 7. 收尾检查清单
 
 - [ ] 结果验证过了吗（独立证据）？
@@ -682,6 +743,15 @@ metadata:
 - [ ] 有没有留下垃圾文件/进程/计划任务要清理？
 - [ ] 重要教训/成果记进记忆了吗？
 - [ ] **用户档案 append 了吗？** 今天他说了关于他自己的新事（偏好、生活、计划、讨厌什么、说过要做的事）→ 追加到 `~/.dsh/memory/user.md`，标日期，**不要覆盖旧条目**。判据：下次会话开头，不看这个文件能不能说出「他昨天说的三件事」——说不出说明档案没跟上。2026-11-05 建（那 41 条永不注入的记忆就是这么漏的：关于他的事被技术细节挤进了检索池）。
+- [ ] **路线库/记忆「用上了」记了吗？（2026-11-17 用户 m08855 定：查得多用得几乎为零，这个不行）**：**只要这轮跑过 `lab tier` 或 `lab recall`，收尾就必须落一条实际使用的记录**——路线用 `lab tier --used 域/代号 --note "一句"`，记忆用 `lab recall --use <id> --note "改了什么"`；**这轮确实没有哪条改变了做法，也要写一行 `--used none --note "这次按常规走，无新判据"`**，不能空着过。判据：`lab recall --audit` 不应再报「一条『用上了』的记录都没有」；`选路记录.jsonl` 里应能看到本轮的 pick。判断这次值不值得记：判断权在我（2026-11-15 用户 m04560 定）。**值得记**——某条路线改变了我的做法 / 暴露了误解 / 和预期相反 / 下次能让我少走弯路；**不值得记（流水账）**——按路线正常走完、没意外、没新判据。记录攒进 `D:\work\架构文档\路线库配套\选路记录.jsonl`，`route_health.py --notes` 汇总成 `D:\work\架构文档\路线库配套\路线心得.md`。**平时只读该文件最顶部那一行「当前阶段认知」**（= 我现如今对「如何使用候选路线库」的理解）；只有特别大的工程才翻历史全量。
+- [ ] **这轮动过世界吗（插件 / DSH / 配置 / 自研工具链 / 新增能力）？动过就先跑 `lab sync`**（2026-11-16 用户 m04855 定流程；2026-11-17 m09610 扩成「整个自身状态」；**2026-11-18 m15986 定：听到「同步一下自身状态」= 跑 `lab sync`**）：更新改变的是「世界」，别处写的是「旧世界」。
+  - **第一步不是列清单，是 `lab sync --type <config|capability|bugfix|experiment-fail> --subject "<主语[|别名]>"`**——它按类型决定这次**必须**有哪几面，逐面搜主语并把**每处首行和数字**摆出来，报「几处说法对不上」。
+  - **为什么必写的面只有一个（2026-11-18 当天改了两遍）**：第一版写死六面 → 改个小配置也要补路线库，造出「这一面没改=红」的假警报；第二版按类型决定面、但仍是「缺一面就红」，**同一个病只换了触发条件**。第三遍才想清：判据不是「缺不缺」，是「**不写会不会永久丢**」——只有**记忆库**会（它是下一个我唯一能读到的地方），其余（路线库/机制文档/索引台账/决策日志/回写）缺一次只是这轮记录不完整、下一轮能补，所以只提示、不改退出码。
+  - **它查的是「矛盾」不是「缺失」**：同一件事一处写「55K」、一处写「47K」，光看「有没有」查不出来，摆在一起才看得见——2026-11-18 就是这么抓出 `lab dl` 建好后能力清单和回写都没同步的。
+  - 各面记法：①**记忆库**（`memory_save` / `memory_update`，**旧条目里的数字、版本、清单必须同步改**——同一事实存两份等于存了一份错的）②**候选路线库**（`tier_domains.py` 加路线**或**补 `words`，改完 `lab test` + 重建基线）③**机制文档**（`我的能力清单.md` / `外来插件掌控表.md` / 机制总图对应层）④**索引台账**（`_索引.md` 这类「人找得到」的表；**它不属于机制文档、最容易漏**）⑤**决策日志**（`lab log --mark X --title "..." --body-file ...`，记「为什么」不只记「做了什么」）⑥**回写**（`lab tier --used 域/代号 --note`，没改变做法也要写 `none`）。
+  - **边界**：`ComfyUI/models/` 这类被 `.gitignore` 排除的，`git status` 看不见，要单独确认「它不在 git 里」这件事本身有没有写下来。
+  - **判据**：`lab sync --check` 报「必写面齐」（= 记忆写了）——建议面缺会列出来但不影响通过；回写这次确实没用到路线库，就用 `lab sync --acknowledge writeback --reason "<一句>"` 留个正当出口，**不要为过检查造数据**。对应路线 `DSH 升级域 K`。
+- [ ] **改完自检：自身状态同步了吗？**（2026-11-16 用户 m04997 定：「保证你在做完改动之后，确认自己的状态是否同步就好」——不用每轮都查，**只在这一轮动过机制/文档/记忆/配置/插件/新增能力时**做）：①跑 `lab selfcheck`（查文档互引 / 工具覆盖 / 插件部署 / 能力指纹四类，0 漂移才算）；②对照 `架构文档\真值源对照表.md` 第一节那 12 类——这次写进文档/记忆的**数字、版本、清单**，是「快照」还是「指针」？真值源变了的，改成指针；③**反向查一遍过期**：这次改动让「哪些旧条目/旧文档里的数字变假了」？`grep -r "<旧数字>" 架构文档` + `memory_search "<旧数字>"` 逐个看（2026-11-17 的教训：`--list` 从 14 个 Lora 变 15 个，旧记忆里那句「应列出 14 个」是用户问才发现的）；④动过世界 → 走上面那条「先跑 `lab sync`」。**判据**：`git log --oneline -3` 看得到本轮提交；`selfcheck` 全绿；能说出「这次我没留下任何裸数字的快照」或「留了 1 处，因为它带截至日期」；**`lab sync --check` 报「必写面齐」**（记忆那一面）。
 - [ ] 汇报是否简洁、只列异常？
 - [ ] **收尾三问**（用户 2026-10-28 明确说"我不会问的，你要自己问"，落点见迭代章程 §5.5）：① 今天踩了什么新坑，值得进速查表/知识库？② 有没有可改进点，值得 `evolve_add` 进队列？③ 有没有该写没写的结论（项目文件/BACKLOG/记忆 5/5）？有就当场落，没有就写一行"今日自省：无新增候选"。
 - [ ] **`[复盘]` 那一行看了吗？** `lab commit` 成功后会打一行复盘状态（上次多久前 / 证据率 / 被否定几次）。超过 3 天没复盘就当场跑 `lab review`（约 5 秒）——提醒是自动的，**看和判断不是**。治 P5「同一个坑反复掉」，2026-11-04 建。
@@ -857,6 +927,7 @@ metadata:
 |---|---|---|---|---|
 | **规则层** | 怎么做事、什么不许做 | 本文件 §0 十九条 + §0.1 索引表 | 每轮自动加载，开工前过一遍 | — |
 | **工具层** | 用什么做 | §5.1 全量清单（**命令数不在这里写死，`lab --help` 现查**；另有 6 个 `ops_*` 文件工具）+ `lab --help` | 按「触发信号」列查表 | 管 |
+| **路线层** | 这类任务可以怎么走（40 域 / 288 条路线 + 每域惯用工具；**数字会变，以 `tier_domains.py` 现算为准**） | `D:\work\tools\lab\tier_domains.py`（唯一权威数据）+ `架构文档\路线库维护手册.md`（怎么改） | 开工 `lab tier "<用户原话>"` 看命中域 → 挑路写一行理由 → 收尾判断值不值得记 → `lab tier --used 域/代号 --note "一句"` 回写 → `route_health.py --notes` 汇总成 `架构文档\路线库配套\路线心得.md`（**平时只读顶部那条当前认知**） | 管入口（§5.1 `lab tier`） |
 | **版本控制层** | 改坏了怎么退回来 | `D:\work` 本地 git 仓库（797 文件，2026-11-05 建）+ `repos/dafeiyu-lab` + `repos/dafeiyu-lab-durable` | 改完一批自研代码就提交；`lab commit` 成功时打 `[主仓库] N 个文件有改动没提交`；`架构文档`/`闭关`/`worktree-repo` 是独立仓库，不进主仓库 | 管入口（§5.1.4 `lab commit`） |
 | **记忆层** | 跨会话记得什么 | `dsh-memory`（`memories.json` + 注入预算 + 动态分层） | ①自动注入；②**开工前 `lab recall "<用户原话>"`**（自动提词 + 标签加权 + 长条降权；新记忆先进池，7 天内命中 ≥2 次才转常驻——不搜就永远出不来） | 只写入口（§1.4），机制本身在插件 |
 | **进化层** | 怎么变强 | `D:\work\自进化\迭代章程.md` + `路线图.md` + `evolve` 候选队列 | 收尾三问（§7）+ 每周一 15:40 `DSH-Evolve-Scan` | **不管**（这里只留指针） |

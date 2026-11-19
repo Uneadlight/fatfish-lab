@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -66,6 +67,11 @@ _matcher.set_lib(globals())
 # 每次 lab tier 调用记一行——**不靠我记得写**，这是「自然而然更新」的数据底座。
 # 与 ~/.dsh/lab-calls.log 同目录同格式（jsonl），多两个字段：命中哪些域、共几条路线。
 TIER_CALLS = Path.home() / '.dsh' / 'tier-calls.jsonl'
+# 2026-11-15 用户 m04361 定：先准、再稳、最后快，且不许把机制做臃肿。
+# tier-calls 记「哪句话命中了哪个域」，但不知道我最后选了哪条——所以
+# 「哪条路线从没被用过」判不了。这里只加一个极小的回写口：
+#   lab tier --used 3D/P   → 往 tier-picks.jsonl 追加一行，不碰历史记录。
+TIER_PICKS = Path(r'D:\work\架构文档\路线库配套\选路记录.jsonl')
 # 每个任务域会用到的「元操作 / 附属工具」——它们不构成「同一任务的几条路」
 # （present 不是一条路，是「怎么把结果给你看」），但少了它们同样会「想不起来」。
 # 2026-11-07 用户 m11658：「我真的想要它包含你的一切，因为只有基于你自身的一切，
@@ -119,7 +125,8 @@ _KNOWLEDGE = {
         ("插件库 4,545 条一句话摘要（造轮子前先搜）", "插件库/one_liner.json"),
     ),
     "自我体检": (
-        ("能力总表：A 可枚举（扫磁盘）/ B 不可枚举（推理写作代码设计）", "架构文档/能力总表.md"),
+        ("能力快照：`lab capsnap` 从真值生成（子命令 / 插件版本 / 路线域条数 / 记忆条数），"
+         "文档里不写死数字、写「见快照」", "架构文档/能力快照.json"),
     ),
     # 2026-11-07 第二轮补：这 12 个域原来一句知识源都没有。
     # 原则不变——只写磁盘上真有的；没有静态文档的就写 None，并说清用哪条命令现查。
@@ -168,7 +175,8 @@ _KNOWLEDGE = {
     # 2026-11-07 补：这两个域其实是同一天 54 分钟里最该翻的两本书，
     # 但原来一句知识源都没写——所以「知识源」这张表第一版就漏了最关键的两个。
     "自动化 / 定时 / 无人值守": (
-        ("计划任务盘点：14→8 的判据与每个任务的实际价值", "架构文档/计划任务盘点-20261107.md"),
+        ("计划任务现状用 `env_doctor only=all` 现查（静态盘点已退场：任务全在 env_doctor 的检查里，"
+         "再留一份快照只会在某次 grep 里冒充真相）", None),
         ("坏了从哪查：静默失败 / 结果码含义 / 8 个经典形状", "架构文档/坏了从哪查.md"),
     ),
     "下载 / 网络 / 换源": (
@@ -259,21 +267,53 @@ def record_call(text: str, opts: list[dict]) -> None:
     except Exception:  # noqa: BLE001
         pass
 def count_subcommands() -> int:
-    """数顶层子命令：每个子命令都有一句 set_defaults(func=cmd_xxx)，比数 add_parser 准
-    （嵌套子解析器也用 add_parser，会让数字偏大）。"""
+    """数顶层子命令：优先运行时取 build_parser() 的 choices。
+
+    2026-11-17 修：原来只扫 lab.py 源码里的 set_defaults(func=cmd_xxx)，
+    看不见外部模块（如 img.py）register(sub) 注册的子命令 —— lab img 就是这么漏的（数出 48 实际 49）。
+    和 selfcheck.lab_subcommands() 同一个病，同一个修法。"""
+    try:
+        import argparse  # noqa: PLC0415
+        import lab as _lab  # noqa: PLC0415
+        for act in _lab.build_parser()._actions:
+            if isinstance(act, argparse._SubParsersAction):
+                return len(act.choices)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         src = (Path(__file__).resolve().parent / 'lab.py').read_text(encoding='utf-8')
     except Exception:  # noqa: BLE001
         return 0
     return len(re.findall(r"set_defaults\(\s*func=cmd_", src))
 def related_assets(text: str, top: int = 5):
-    """从 assets 扫描结果里挑名字出现在任务描述里的（或体积最大的几个）。"""
+    """从 assets 扫描结果里挑名字出现在任务描述里的（或体积最大的几个）。
+
+    **2026-11-19 加缓存**：cProfile 实测 `lab tier` 2.3 秒里有 **1.84 秒**是
+    `assets.scan()` 在扫 59 个目录（`nt.scandir` 25,882 次）——`dir_size()` 和
+    `newest_mtime()` 各占 0.9 秒。而 `lab tier` 是**开工第一步最常跑的命令**
+    （705 次调用），每次白扫 1.8 秒。
+    资产状态变化很慢（目录大小、文件数），所以缓存 1 小时；命中缓存时这条路径
+    从 1.8 秒降到 ~5 毫秒。缓存坏了/过期了自动重扫，不影响正确性。
+    """
+    cache = Path(__file__).resolve().parent / ".cache" / "assets-scan.json"
+    rows = None
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import assets as assets_mod  # noqa: PLC0415
-        rows, _total = assets_mod.scan(1.0)
-    except Exception:  # noqa: BLE001
-        return []
+        if cache.exists() and (time.time() - cache.stat().st_mtime) < 3600:
+            rows = json.loads(cache.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 缓存坏了就当没有，重新扫
+        rows = None
+    if rows is None:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import assets as assets_mod  # noqa: PLC0415
+            rows, _total = assets_mod.scan(1.0)
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+            except Exception:  # noqa: BLE001 — 写缓存失败不该影响结果
+                pass
+        except Exception:  # noqa: BLE001
+            return []
     hits = []
     for row in rows:
         name = row.get("name") or ""
@@ -331,6 +371,50 @@ def now_line() -> str:
             tail = " · 今天已无价档边界"
 
     return f"现在 {n:%Y-%m-%d} 周{wd} {n:%H:%M} · {state}{tail}"
+def _writeback_reminder() -> None:
+  """查了 665 次只回写 15 条——没有那一行逼我回答。
+
+  2026-11-18 加：`lab tier` 原来把候选列完就结束，我顺手就忘了回写。
+  这里在输出末尾补一行：距上次 pick 超过 24 小时（或从没 pick 过）就提醒一次。
+  不阻塞、不强制，但必须出现在输出里——否则又是「有动作、无出口」。
+  """
+  import json as _json
+  from datetime import datetime as _dt
+  path = Path(r'D:\work\架构文档\路线库配套\选路记录.jsonl')
+  if not path.exists():
+    return
+  try:
+    raw = path.read_text(encoding='utf-8')
+  except Exception:
+    return
+  last_at = None
+  for line in raw.splitlines():
+    line = line.strip()
+    if not line:
+      continue
+    try:
+      rec = _json.loads(line)
+    except Exception:
+      continue
+    if rec.get('event') == 'pick' and rec.get('at'):
+      last_at = rec['at']
+  hours = None
+  if last_at:
+    try:
+      hours = (_dt.now() - _dt.fromisoformat(last_at)).total_seconds() / 3600.0
+    except Exception:
+      hours = None
+  if hours is not None and hours < 24:
+    return
+  if hours is None:
+    print("【提醒】选路记录里还没有任何一条 pick —— 这次选了哪条？")
+  else:
+    print("【提醒】上次回写路线是 {0:.0f} 小时前 —— 这次选了哪条？".format(hours))
+  print("    lab tier --used <域>/<代号> --note \"一句心得\"")
+  print("    都不合适：lab tier --used none --note \"这次按常规走，无新判据\"")
+  print()
+
+
 def _chain_cmd(a) -> int:
     """`lab tier --chain record|deviate …`：经验链的写入口（闸门在这，打印在【5a】）。"""
     if a.chain == "deviate":
@@ -368,8 +452,14 @@ def main() -> int:
     ap.add_argument("task", nargs="?", default="", help="任务描述（一句话）；用 --inventory 时可不给")
     ap.add_argument("--no-assets", action="store_true", help="跳过资产扫描（快 1 秒，但没推荐）")
     ap.add_argument("--inventory", action="store_true", help="打印「不构成路线的资产」清单（不是路，但也别丢）")
+    ap.add_argument("--full", action="store_true",
+                    help="路线每条都展开（默认每域前 3 条展开，其余只列标题——2026-11-17 改成默认短，因为一次任务常命中 2-3 个域、每条 4 行，全展开超 200 行没人读得完）")
     ap.add_argument("--audit", action="store_true", help="路线清单体检：重复/死路径/空壳/代号，以及哪些域该休整了")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
+    ap.add_argument("--used", default="", metavar="域/代号",
+                    help="事后回写：这次实际选了哪条路线（如 3D/P 或 P），只追加一行到 tier-picks.jsonl")
+    ap.add_argument("--note", default="", metavar="一句心得",
+                    help="配合 --used：这条路让我意外的地方（好在哪/坑在哪）。只在意外时写，不用每次")
     # 经验链回写（2026-11-13）：链只有过了证据闸门才能进库——账本我手写，
     # 而我有「把打算写成已完成」的案底（mem_mw24413n），所以自述不收，让 git/磁盘替我验。
     ap.add_argument("--chain", choices=["record", "deviate"],
@@ -383,6 +473,29 @@ def main() -> int:
     ap.add_argument("--chain-file", default="", help="证据②：磁盘上真实存在的证据文件路径")
     ap.add_argument("--chain-reason", default="", help="deviate 时写清这次的替代组装好在哪")
     a = ap.parse_args()
+    if a.used or a.note:
+        # 一次只写一行，除格式外的校验一概不做——回写口越蠢越不会坏。
+        try:
+            rec = {
+                "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "event": ("pick" if a.used.strip() else "review"),
+                "sessionId": os.environ.get("DSH_SESSION_ID", ""),
+                "used": a.used.strip(),
+                "note": (a.note or "").strip()[:200],
+                "task": (a.task or "")[:80],
+            }
+            with TIER_PICKS.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            _label = rec["used"] if rec["event"] == "pick" else "阶段认知"
+            print(f"已记：{_label}（{TIER_PICKS}）")
+        except Exception as e:  # noqa: BLE001
+            print(f"记录失败：{e}")
+        # 2026-11-19 修（盲审第 4 条）：原来这里无条件 return 0，把后面的
+        # --audit / --inventory / --chain 全挡掉了——`lab tier --chain record --note "..."`
+        # 只写一条 review 记录、链根本不落盘，却打印「已记」并退出 0。
+        # 回写和「查/建链」是两件独立的事，只有「这次只做回写」才该在这里结束。
+        if not (a.audit or a.inventory or a.chain or a.task):
+            return 0
 
     if a.audit:
         items = route_hygiene()
@@ -595,11 +708,23 @@ def main() -> int:
         print()
         for opt in opts:
             print(f"  [{opt['domain']}]")
-            for code, name, good, cost, how in opt["routes"]:
+            _tools = opt.get("tools")
+            if _tools:
+                print(f"    惯用工具（参考，不是清单——实际按任务挑）：{_tools}")
+            _rs = opt["routes"]
+            _shown = len(_rs) if a.full else 3
+            for _i, (code, name, good, cost, how) in enumerate(_rs):
                 print(f"    {code}. {name}")
-                print(f"       长处：{good}")
-                print(f"       代价：{cost}")
-                print(f"       怎么验：{how}")
+                if _i < _shown:
+                    print(f"       长处：{good}")
+                    print(f"       代价：{cost}")
+                    print(f"       怎么验：{how}")
+            if _shown < len(_rs):
+                # 把没展开的代号列出来：读输出的人即使只看到前几行，也知道后面有哪几条
+                _rest = " / ".join(str(_r[0]) for _r in _rs[_shown:])
+                print(f"    …还有 {len(_rs) - _shown} 条只列了标题：{_rest}"
+                      f"（`lab tier \"...\" --full` 展开全部；也可以只问那一条："
+                      f"`lab tier \"...\" --full | grep -A3 \"^    X\\.\"`）")
             aux = opt.get("aux") or []
             if aux:
                 # 主线归 routes、配角归 aux——两者合起来才是这个域的完整能力图
@@ -654,6 +779,8 @@ def main() -> int:
     print()
     print("  记忆：跑 `lab recall \"<用户原话>\"` 找相关经验——记忆不是一个数，是一条命令。")
     print()
+
+    _writeback_reminder()
 
     return 0
 

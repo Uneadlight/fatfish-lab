@@ -237,7 +237,17 @@ def _scrub_text(text: str) -> str:
 
 
 def cmd_stage(a: argparse.Namespace) -> int:
-  repo = Path(a.repo) if a.repo else DEFAULT_REPO
+  # 2026-11-19 修（盲审第 6 条）：原来 `repo = Path(a.repo) if a.repo else DEFAULT_REPO`，
+  # 而 DEFAULT_REPO = 工作区根。但 stage 的目标是**发布仓库**（release-plan.txt 自己是
+  # 「fatfish-lab 发布清单」，条目落到 07-tools/ 06-design/ 这棵 fatfish-lab 的树），
+  # 不是主仓库。实测已经污染过一次：工作区根下留着 07-tools/（53 文件 924 KB，是
+  # tools/lab 的旧副本）和 06-design/（2 文件）。且复制后 `repo.rglob('*')` 会扫到
+  # tools/lab/claims.py 里的 `D:\work` 打 [STOP]，**已复制的文件不回滚**。
+  # 所以这里改成「必须显式给 --repo」——猜错的代价（污染 + 无法回滚）比多打几个字大。
+  if not a.repo:
+    return _fail(2, '必须显式给 --repo <发布仓库目录>：stage 的目标是发布仓库（fatfish-lab），'
+                    '不是工作区根。默认值猜错过一次，已改成必填。')
+  repo = Path(a.repo)
   plan = Path(a.plan) if a.plan else DEFAULT_PLAN
   if not repo.exists():
     return _fail(2, f'仓库目录不存在: {repo}')
@@ -593,33 +603,6 @@ def cmd_plugins(a: argparse.Namespace) -> int:
   return 0
 
 
-def cmd_issue(a: argparse.Namespace) -> int:
-  slug = _slug(a)
-  if a.comment_file:
-    text = Path(a.comment_file).read_text(encoding='utf-8')
-    code, data = _gh('POST', f'/repos/{slug}/issues/{a.num}/comments', {'body': text})
-    if code != 201:
-      print(f'[FAIL:执行失败] comment {code}: {data.get("error", "")}')
-      return 1
-    print(f'[OK] comment {data.get("id")}  {data.get("html_url")}')
-
-  if a.close:
-    code, data = _gh('PATCH', f'/repos/{slug}/issues/{a.num}', {'state': 'closed', 'state_reason': 'completed'})
-    if code != 200:
-      print(f'[FAIL:执行失败] close {code}: {data.get("error", "")}')
-      return 1
-    print(f'[OK] issue closed  state={data.get("state")}  reason={data.get("state_reason")}')
-
-  if not a.comment_file and not a.close:
-    code, data = _gh('GET', f'/repos/{slug}/issues/{a.num}')
-    if code != 200:
-      print(f'[FAIL:执行失败] issue {code}: {data.get("error", "")}')
-      return 1
-    print(f'#{data.get("number")} [{data.get("state")}] {data.get("title")}')
-    print(f'  {data.get("html_url")}')
-  return 0
-
-
 # ------------------------------------------------------------ journal
 
 
@@ -669,21 +652,72 @@ def cmd_commit(a: argparse.Namespace) -> int:
     # 这时用 --skip-selfcheck 留一个明确的逃生门，而不是悄悄绕过。
     if not getattr(a, 'skip_selfcheck', False):
       labpy = Path(__file__).resolve()
-      sc = subprocess.run(
-        (sys.executable, str(labpy), 'selfcheck'),
-        capture_output=True, text=True, encoding='utf-8', errors='replace',
-        cwd=str(labpy.parent.parent.parent))
+      # 2026-11-19 修：这道闸原来是 fail-open 的——只从人读文本里正则抓「共 N 处漂移」，
+      # 抓不到就把 drift 当 0 并打印「全绿」，sc.returncode 从不参与判断、也没有 timeout。
+      # 后果：selfcheck 自己崩掉（改的正是 selfcheck.py 时最典型）输出的 traceback 里没有那句中文
+      # → drift=0 → 照常提交；谁改一句汇总文案，这道闸也会静默失效。
+      # 现在三种情况一律中止：抓不到数字 / 退出码非 0 / 120 秒未返回。
+      try:
+        sc = subprocess.run(
+          (sys.executable, str(labpy), 'selfcheck'),
+          capture_output=True, text=True, encoding='utf-8', errors='replace',
+          cwd=str(labpy.parent.parent.parent), timeout=120)
+      except subprocess.TimeoutExpired:
+        print('[FAIL:自检超时] selfcheck 120 秒没返回，已中止提交。')
+        print('  → 检查器自己卡住不等于代码没问题；查清再提交，或加 --skip-selfcheck 并写明原因')
+        return 2
       out = (sc.stdout or '') + (sc.stderr or '')
-      mo = re.search(r'共\s*(\d+)\s*处漂移', out)
-      drift = int(mo.group(1)) if mo else 0
-      if drift:
-        print(f'[FAIL:自检未过] selfcheck 有 {drift} 处漂移，已中止提交：')
-        for ln in out.splitlines():
-          if '处漂移' in ln and '0 处' not in ln:
-            print('  ' + ln.strip())
+      # 2026-11-19 第二版：第一版改成「抓不到『共 N 处漂移』就判失败」，
+      # 结果正常通过时 selfcheck 打的是「机制与能力一致：…」和一堆「0 处不一致」，
+      # 根本没有「共 N 处漂移」这句话 → 每次提交都被误判成「没跑起来」。
+      # 判据改成先看退出码，再看两种成功标志，最后才怀疑输出格式变了。
+      ok_flag = ('机制与能力一致' in out) or bool(re.search(r'\b0 处不一致', out))
+      if sc.returncode != 0:
+        mo = re.search(r'共\s*(\d+)\s*处漂移', out)
+        if mo:
+          print(f'[FAIL:自检未过] selfcheck 有 {mo.group(1)} 处漂移，已中止提交：')
+          for ln in out.splitlines():
+            if '处漂移' in ln and '0 处' not in ln:
+              print('  ' + ln.strip())
+        else:
+          print(f'[FAIL:自检未过] selfcheck 退出码 {sc.returncode}（没打出漂移数，可能是自己崩了）：')
+          for ln in out.splitlines()[-12:]:
+            print('  ' + ln.rstrip())
         print('  → 先修漂移；确认要带漂移提交，加 --skip-selfcheck')
         return 2
+      if not ok_flag:
+        print('[FAIL:自检没跑起来] selfcheck 退出码 0，但输出里没有成功标志（「机制与能力一致」/「0 处不一致」）：')
+        for ln in out.splitlines()[-12:]:
+          print('  ' + ln.rstrip())
+        print('  → 输出格式变了或检查提前退出；确认无误后加 --skip-selfcheck 并写明原因')
       print('[selfcheck] 全绿')
+
+    # ── 0.5 改了 lab 工具就跑测试（2026-11-19 加）───────────────
+    # 起因：给 tier_domains.py 加路线时，一次写成 6 元组、一次把元组插进字符串中间。
+    # 两个错 py_compile 都照过，lab tier 只是「不渲染」或「r[0] 取到字符」，都不报错。
+    # 真正能抓它们的是 tests/test_tier.py 的结构契约测试——但那次我没跑 lab test。
+    # 挂在这里：只要暂存路径里有 tools/lab/ 的文件就必跑，不靠我记。
+    # 边界（想清楚才不会被「看着像修好了」骗）：只认 --files 给的路径；
+    # 不给 --files（走 --all 或全量）时这道闸不生效，那种提交靠 selfcheck 兜。
+    if not getattr(a, 'skip_selftest', False):
+      _files = [str(p).replace('\\', '/') for p in (a.files or [])]
+      if any(p.startswith('tools/lab/') for p in _files):
+        labpy2 = Path(__file__).resolve()
+        tt = subprocess.run(
+          (sys.executable, str(labpy2), 'test'),
+          capture_output=True, text=True, encoding='utf-8', errors='replace',
+          cwd=str(labpy2.parent.parent.parent))
+        tout = (tt.stdout or '') + (tt.stderr or '')
+        _passed = re.search(r'(\d+) passed', tout)
+        _failed = re.search(r'(\d+) failed', tout)
+        if tt.returncode != 0 or _failed:
+          print('[FAIL:测试未过] lab test 没通过，已中止提交：')
+          for ln in tout.splitlines()[-25:]:
+            if ln.strip():
+              print('  ' + ln.strip())
+          print('  → 先修测试；确认要带失败提交，加 --skip-selftest')
+          return 2
+        print(f'[lab test] {_passed.group(1) if _passed else "?"} passed')
 
     # ── 1. 暂存 ──────────────────────────────────────────────
     if a.files:
@@ -821,6 +855,7 @@ def cmd_commit(a: argparse.Namespace) -> int:
       # 提醒挂在 commit 上而不是 push 上：本地仓库（E:/DS公作区）没有 remote，
       # push 本来就会失败，但「这次提交没记日志」跟推没推成功无关。2026-11-07 实测踩到。
       _review_remind(repo)
+      _sync_remind(staged, getattr(a, 'subject', None))
 
     if not staged:
       # 只推送旧提交（没有新 commit）：也要提醒一次——旧提交可能也没记
@@ -1363,7 +1398,7 @@ def build_parser() -> argparse.ArgumentParser:
 
   st = sub.add_parser('stage', help='按清单把产出拷进发布仓库（脱敏 + 安全扫描）')
   st.add_argument('--plan', help='发布清单，默认 tools/lab/release-plan.txt')
-  st.add_argument('--repo', help='目标仓库目录，默认工作区根 E:/DS公作区')
+  st.add_argument('--repo', help='目标仓库目录（**必填**，发布目标是 fatfish-lab，不是工作区根）')
   st.add_argument('--dry', action='store_true', help='只打印不拷贝')
   st.add_argument('--skip-scan', dest='skip_scan', action='store_true', help='跳过安全扫描')
   st.add_argument('--no-auto', dest='no_auto', action='store_true',
@@ -1381,8 +1416,11 @@ def build_parser() -> argparse.ArgumentParser:
   cm.add_argument('--dry', action='store_true', help='只打印要做什么，不动仓库')
   cm.add_argument('--skip-selfcheck', dest='skip_selfcheck', action='store_true',
                   help='跳过提交前的 selfcheck 漂移检查（默认有漂移就中止）')
+  cm.add_argument('--skip-selftest', dest='skip_selftest', action='store_true',
+                  help='跳过「改了 tools/lab/ 就跑 lab test」这道闸（默认跑，测试红就中止）')
   cm.add_argument('--allow-untracked', dest='allow_untracked', action='store_true',
                   help='显式 --files 且仓库里还有未跟踪文件时，跳过二次确认（非交互环境必须加）')
+  cm.add_argument('--subject', help='这次改动的「主语」（一句话），给了就在提交后真跑 lab sync 查六面，不给只提醒不查')
   cm.set_defaults(func=cmd_commit)
 
   jr = sub.add_parser('journal', help='看动作记录，标出「有 start 没 done」的未完成项')
@@ -1433,13 +1471,6 @@ def build_parser() -> argparse.ArgumentParser:
   pl = sub.add_parser('plugins', help='列出 profile 里已装插件的版本 / 客户端 bundle / 描述')
   pl.add_argument('--profile', help='profile 目录，默认 ~/.dsh/profiles/desktop')
   pl.set_defaults(func=cmd_plugins)
-
-  iss = sub.add_parser('issue', help='看 / 评论 / 关 issue')
-  iss.add_argument('num', type=int, help='issue 编号')
-  iss.add_argument('--comment-file', dest='comment_file', help='把这个 markdown 文件作为评论发出去')
-  iss.add_argument('--close', action='store_true', help='评论之后（或单独）关闭')
-  iss.add_argument('--repo', help='owner/name')
-  iss.set_defaults(func=cmd_issue)
 
   oc = sub.add_parser('ocr', help='图片转文字（RapidOCR，本地离线，跑在 ocr-venv312 里）')
   oc.add_argument('image', help='图片路径（png/jpg/webp/bmp/tiff）')
@@ -1561,8 +1592,11 @@ def build_parser() -> argparse.ArgumentParser:
   tr.add_argument('task', nargs='?', default='', help='任务描述（一句话）；--audit / --inventory 时可不给')
   tr.add_argument('--no-assets', action='store_true', help='跳过资产扫描（快 1 秒，但没推荐）')
   tr.add_argument('--inventory', action='store_true', help='打印「不构成路线的资产」清单')
+  tr.add_argument('--full', action='store_true', help='路线每条都展开（默认每域前 3 条，其余只列标题）')
   tr.add_argument('--audit', action='store_true', help='路线清单体检：重复/死路径/空壳/代号/该休整的域')
   tr.add_argument('--json', action='store_true', help='输出 JSON')
+  tr.add_argument('--used', default='', metavar='域/代号', help='事后回写：这次实际选了哪条路线（只追加一行到 tier-picks.jsonl）')
+  tr.add_argument('--note', default='', metavar='一句心得', help='配合 --used：这条路让我意外的地方（只在意外时写）')
   # 经验链回写（2026-11-13）：lab.py 与 tier.py 是两层 argparse，这边不声明
   # 就 unrecognized——补声明 + cmd_tier 透传。上次只改了 tier.py 忘了这里，实测才暴露。
   tr.add_argument('--chain', choices=['record', 'deviate'],
@@ -1625,6 +1659,15 @@ def build_parser() -> argparse.ArgumentParser:
   nt = sub.add_parser('nettest', help='下载前先量吞吐：给几个 URL，各下 8MB 测速，报最快的那个')
   nt.add_argument('urls', nargs='+', help='一个或多个下载地址')
   nt.set_defaults(func=cmd_nettest)
+
+  dl = sub.add_parser('dl', help='下载的唯一入口：选源 → 测速 → 判断要不要继续 → 下并校验（一步做完三步）')
+  dl.add_argument('urls', nargs='+', help='一个或多个下载地址（多个 = 多源赛跑）')
+  dl.add_argument('-o', '--output', help='存到哪；不给就取 URL 最后一段')
+  dl.add_argument('--max-minutes', type=float, default=30.0,
+                  help='预估耗时上限（分钟），超了就 exit 3 停下问，默认 30')
+  dl.add_argument('--probe-only', action='store_true', help='只测速和预估，不下载')
+  dl.add_argument('--no-resume', action='store_true', help='不续传（默认 -C - 续传）')
+  dl.set_defaults(func=cmd_dl)
 
   rv = sub.add_parser('review', help='复盘：完成声明证据率 + 被否定次数，写回复盘状态（P5 的触发点）')
   rv.set_defaults(func=cmd_review)
@@ -1709,6 +1752,17 @@ def build_parser() -> argparse.ArgumentParser:
   op.add_argument('--no-calls', action='store_true', help='跳过会话日志的调用统计（快，但「用过」列会变成 n/a）')
   op.add_argument('--only', metavar='NAME', help='只看名字里含这个子串的插件')
   op.set_defaults(func=cmd_onboard)
+
+  import img as _img
+  _img.register(sub)
+  import memcheck as _mc
+  _mc.register(sub)
+  import sync as _sync
+  _sync.register(sub)
+  import route as _route
+  _route.register(sub)
+  import capsnap as _capsnap
+  _capsnap.register(sub)
 
   return parser
 
@@ -1805,12 +1859,72 @@ def _review_remind(repo: Path | None = None) -> None:
   _home_repo_remind(repo)
 
 
-def _needs_log_remind(log_mtime: float, commit_ts: int) -> bool:
-  """日志比提交旧就该提醒。抽成纯函数是为了能直接测边界。
+def _sync_remind(staged: list[str] | None, subject: str | None = None) -> None:
+  """提交后按「改了什么文件」提醒该同步哪几面。
 
-  相等也算「已经记过」——同一秒内 lab log 再 lab commit 不该念。
+  2026-11-18 用户 m15948 定：「以后我说『同步一下自身状态』都按 lab sync 这个流程」。
+  挂在 commit 后面，是因为提交是必然发生的事件——不靠「记得同步」。
+
+  2026-11-18 用户 m16738 追问：「缺了只提示——那提示了后你还会去做吗？」
+
+  诚实答案：光提醒不够。原来只是**按文件名猜**「可能涉及哪面」，猜出来的提示
+  我只会觉得「我知道啊」→ 无视。所以改成两档：
+    · 给了 --subject → 真调 `sync.run(check=True)` 查一遍，缺面直接点名；
+    · 没给 → 明说「这次没查」，不假装查过（假装查过比不查更坏）。
   """
-  return log_mtime < commit_ts
+  if not staged:
+    return
+  joined = ' '.join(staged)
+  hints: list[tuple[str, str]] = []
+  if 'tier_domains.py' in joined:
+    hints.append(('capability', '路线库'))
+  if 'cordis.patch.yml' in joined:
+    hints.append(('config', '配置'))
+  if 'SKILL.md' in joined:
+    hints.append(('config', '机制文档'))
+  # 2026-11-18 补：改 lab 工具本体的 .py 也算能力面 —— 里面写着子命令数、参数口径、
+  # 判据阈值（如 MAX_FIVES_INJECT / LIMIT_CHARS），改了不更新能力清单与记忆，
+  # 下次照旧数字行事。之前只在提交 tier_domains.py / SKILL.md / cordis.patch.yml 时查。
+  if 'tools/lab/' in joined or 'tools\\lab\\' in joined:
+    hints.append(('capability', 'lab 工具'))
+  if not hints:
+    return
+
+  if subject:
+    print('[同步] 这次提交涉及 ' + ' / '.join(lbl for _, lbl in hints) + f'，实查「{subject}」：')
+    for ctype, label in hints:
+      try:
+        import sync as _sync
+        rc = _sync.run(ctype, subject, as_json=False, check=True)
+        if rc == 0:
+          print(f'   · {label}：必写面齐')
+        else:
+          print(f'   · {label}：[缺] 必写面没写——补完再提交；确实不补就跑 '
+                f'`lab sync --acknowledge <面> --subject "<主语>" --reason "<一句>"`')
+      except Exception as e:  # noqa: BLE001 — 查不了要说不查不了，不能吞
+        print(f'   · {label}：查不了（{type(e).__name__}: {e}）')
+    return
+
+  print('[同步] 本次改动涉及：')
+  for ctype, label in hints:
+    print(f'   · {label} → lab sync --type {ctype} --subject "<主语>"')
+  print('   → 这次**没查**六面齐不齐（不知道主语）。加 --subject "<一句话>"，下次提交我就真查。')
+
+
+LOG_GRACE_SECONDS = 1800   # 提交前半小时内写过日志，就算这次记过了
+
+
+def _needs_log_remind(log_mtime: float, commit_ts: int) -> bool:
+  """日志比提交旧「太多」才提醒。
+
+  2026-11-18 改：原来是 `log_mtime < commit_ts` 就提醒，于是**先 log 再 commit**
+  这个正确工作流每次都挨一次警告——久而久之只会学会无视它（和 selfcheck 的
+  假警报是同一个病）。加半小时宽限期后：先 log 再 commit（相差几分钟）不念；
+  提交完几小时/几天没写日志才念。
+
+  同一秒也算「已经记过」——`lab log` 紧接着 `lab commit` 不该念。
+  """
+  return commit_ts - log_mtime > LOG_GRACE_SECONDS
 
 
 def _log_remind() -> None:
@@ -1890,6 +2004,24 @@ def cmd_nettest(a: argparse.Namespace) -> int:
     print(f'[ERROR] 找不到 {script}', file=sys.stderr)
     return 2
   cmd = [sys.executable, str(script), *a.urls]
+  return _sp.call(cmd)
+
+
+def cmd_dl(a: argparse.Namespace) -> int:
+  """下载的唯一入口：转调同目录的 dl.py（选源 → 测速 → 判断 → 下 → 校验）。"""
+  import subprocess as _sp
+  script = Path(__file__).resolve().with_name('dl.py')
+  if not script.is_file():
+    print(f'[ERROR] 找不到 {script}', file=sys.stderr)
+    return 2
+  cmd = [sys.executable, str(script), *a.urls]
+  if a.output:
+    cmd += ['-o', a.output]
+  cmd += ['--max-minutes', str(a.max_minutes)]
+  if a.probe_only:
+    cmd.append('--probe-only')
+  if a.no_resume:
+    cmd.append('--no-resume')
   return _sp.call(cmd)
 
 
@@ -2201,10 +2333,17 @@ def cmd_tier(a: argparse.Namespace) -> int:
     cmd.append('--no-assets')
   if getattr(a, 'inventory', False):
     cmd.append('--inventory')
+  if getattr(a, 'full', False):
+    cmd.append('--full')
   if getattr(a, 'audit', False):
     cmd.append('--audit')
   if getattr(a, 'json', False):
     cmd.append('--json')
+  if getattr(a, 'used', ''):
+    # 两层 argparse：这边声明了还得手动透传（同第 1568 行注释那个坑）。
+    cmd.extend(['--used', a.used])
+  if getattr(a, 'note', ''):
+    cmd.extend(['--note', a.note])
   if getattr(a, 'chain', ''):
     cmd += ['--chain', a.chain]
     for _k in ('name', 'tags', 'how', 'crit', 'tier', 'commit', 'file', 'reason'):

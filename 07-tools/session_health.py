@@ -32,10 +32,10 @@ except ImportError:
 
 HOME = Path(os.path.expandvars(r"%USERPROFILE%"))
 ROOT = HOME / ".dsh" / "sessions"
-BACKUP = Path(r"D:\work\备份\session-repair-20261105")
+BACKUP = Path(r"D:\work\备份\05-会话数据\session-repair-20261105")
 REPORT = HOME / ".dsh" / "session-health.log"
 WS_FILE = HOME / ".dsh" / "storages" / "workspace.json"
-WS_BACKUP = Path(r"D:\work\备份")
+WS_BACKUP = Path(r"D:\work\备份\05-会话数据")
 
 
 def is_msg(x):

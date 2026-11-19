@@ -18,3 +18,5 @@ models/*.gguf
 
 # 压测数据（WAL 日志，每次重跑都会重建）
 .stress/
+# Windows 保留设备名，git 会误列但打不开（2026-11-19）
+CON

@@ -170,7 +170,13 @@ def split_paras(text: str):
     return out
 
 
-def analyze(text: str) -> dict:
+def analyze(text: str, base_line: int = 0) -> dict:
+    """扫一段文本，返回声明/有证据/无证据三类。
+
+    `base_line`：这段文本在整个文件里的**起始行号减 1**（0 表示这段就是全文）。
+    2026-11-19 加：`--date` 路径是逐段调用本函数的，不传这个偏移的话，
+    报出来的行号是段内相对行号，指不回原文。
+    """
     claims, backed, unbacked = 0, 0, []
 
     for start, para in split_paras(text):
@@ -182,14 +188,19 @@ def analyze(text: str) -> dict:
             backed += 1
         else:
             claims += 1
-            # 挑出触发的那句话
+            # 挑出触发的那句话，并算出它在原文里的**绝对行号**。
+            # 2026-11-19 修（盲审第 8 条）：原来记的是 `start`（段首行号），而
+            # para 的第一行恒为 `## 标题`，于是 `--all` / `--date` 逐段调用时
+            # 清单里所有无证据声明都打印 `L1`，指不到那句话。
             hit = None
-            for ln in para.splitlines():
+            hit_line = base_line + start
+            for off, ln in enumerate(para.splitlines()):
                 if CLAIM_RE.search(ln) and ln.strip():
                     hit = ln.strip()
+                    hit_line = base_line + start + off
                     break
             unbacked.append({
-                'line': start,
+                'line': hit_line,
                 'text': (hit or para.splitlines()[0])[:110],
             })
 
@@ -270,6 +281,17 @@ def claim_paragraphs(text: str) -> list:
         window = ptext
         if i + 1 < len(paras):
             window += '\n' + paras[i + 1][1]
+            # 2026-11-18：下一段若是列表项，把**连续列表项**一并并进窗口。
+            # 起因：`_paragraphs` 把每个列表项各自成段，于是「做完了」+ 五项列表
+            # 只看得到第一项——第一项没数字就判「光说不带数」，而真证据在第三项。
+            # 19 条误报里绝大多数是这个形态。
+            j = i + 2
+            while j < len(paras):
+                head = paras[j][1].lstrip('\n').splitlines()[0] if paras[j][1] else ''
+                if not LIST_RE.match(head):
+                    break
+                window += '\n' + paras[j][1]
+                j += 1
         out.append({
             'line': start,
             'text': hits[0].strip()[:110],
@@ -395,7 +417,7 @@ def main() -> None:
         r = chat_claims(args.days)
         if args.json:
             print(json.dumps(r, ensure_ascii=False, indent=2))
-            return
+            return 1 if r['unbacked'] else 0
         c, b = r['claims'], r['backed']
         pct = (b / c * 100) if c else 0
         print(f'[CLAIMS --chat] 最近 {args.days} 天，扫了 {r["scanned"]} 个会话')
@@ -410,7 +432,8 @@ def main() -> None:
             print('\n  这些话说出口时手里没有东西接着：')
             for u in r['unbacked'][:25]:
                 print(f'    {u["date"]}  {u["text"]}')
-        return
+        # 2026-11-19 修：原来这里直接 return（恒 0），接进脚本时永远报成功。
+        return 1 if r['unbacked'] else 0
 
     if args.file:
         # utf-8-sig：PowerShell 的 Set-Content -Encoding UTF8 会写 BOM，
@@ -418,8 +441,7 @@ def main() -> None:
         text = Path(args.file).read_text(encoding='utf-8-sig')
         print(f'[CLAIMS] {args.file}')
         r = analyze(text)
-        report(r, args.json)
-        return
+        return report(r, args.json)
 
     full = LOG.read_text(encoding='utf-8-sig')
 
@@ -429,7 +451,9 @@ def main() -> None:
             m = re.match(r'## (\d{4}-\d{2}-\d{2})', para)
             if not m:
                 continue
-            r = analyze(para)
+            # 2026-11-19 修（盲审第 8 条）：这里也是逐段调用，不传偏移的话
+            # 报出来的是段内相对行号（`--all` 的清单里会看到一堆 L1）。
+            r = analyze(para, base_line=start - 1)
             total += r['claims']
             backed += r['backed']
             for u in r['unbacked']:
@@ -439,33 +463,41 @@ def main() -> None:
             print('\n无证据清单：')
             for u in all_unbacked[:30]:
                 print(f"  {u['date']} L{u['line']}: {u['text']}")
-        return
+        # 2026-11-19 修：原来直接 return（恒 0）
+        return 1 if all_unbacked else 0
 
     date = args.date or datetime.now().strftime('%Y-%m-%d')
     # 取该日期的所有段
+    # 2026-11-19 修（盲审第 8 条后半）：原来 `para.startswith(f'## {date}')` 是**前缀**
+    # 匹配，`--date 2026-11-1` 会把 10/11/12… 的段一起算进来。改成「日期后面必须是
+    # 空白或行尾」。同时保留每段的绝对起始行号（下面要传给 analyze 折算行号）。
+    _date_re = re.compile(rf'^##\s+{re.escape(date)}(?:\s|$)')
     section = []
     for start, para in split_paras(full):
-        if para.startswith(f'## {date}'):
-            section.append(para)
+        if _date_re.match(para):
+            section.append((start, para))
     if not section:
         print(f'[CLAIMS] {date} 没有日志段')
-        return
+        return 0
 
     print(f'[CLAIMS] {date}（{len(section)} 段）')
     total, backed, unbacked = 0, 0, []
-    for para in section:
-        r = analyze(para)
+    for start, para in section:
+        r = analyze(para, base_line=start - 1)
         total += r['claims']
         backed += r['backed']
         unbacked.extend(r['unbacked'])
 
-    report({'claims': total, 'backed': backed, 'unbacked': unbacked}, args.json)
+    return report({'claims': total, 'backed': backed, 'unbacked': unbacked}, args.json)
 
 
-def report(r: dict, as_json: bool) -> None:
+def report(r: dict, as_json: bool) -> int:
     if as_json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
-        return
+        # 2026-11-19 修：原来这里直接 return，到不了下面的 sys.exit，导致
+        # `lab claims --json` 永远退出 0——接进脚本/CI 时即使查出 N 条无证据也报成功。
+        # 现在统一由 main() 返回退出码，__main__ 里 sys.exit(main())。
+        return 1 if r['unbacked'] else 0
     c, b = r['claims'], r['backed']
     pct = (b / c * 100) if c else 0
     print(f'  完成声明 {c} 条')
@@ -475,8 +507,8 @@ def report(r: dict, as_json: bool) -> None:
         print('\n  无证据清单（这些话说出口时没有东西接着）：')
         for u in r['unbacked']:
             print(f"    L{u['line']}: {u['text']}")
-    sys.exit(0 if not r['unbacked'] else 1)
+    return 1 if r['unbacked'] else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

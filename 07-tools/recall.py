@@ -119,14 +119,54 @@ def first_line(mem: dict, n: int = 52) -> str:
     return body[:n] + ('…' if len(body) > n else '')
 
 
-def log_call(terms: list[str], n_hits: int) -> None:
+def wrap_body(text: str, width: int = 96) -> list[str]:
+  """把正文按 width 折行。中文按词切没意义，按字符切就够了。"""
+  out = []
+  for raw in (text or '').split('\n'):
+    raw = raw.rstrip()
+    if not raw:
+      out.append('')
+      continue
+    while len(raw) > width:
+      out.append(raw[:width])
+      raw = raw[width:]
+    out.append(raw)
+  return out
+
+
+BODY_CHARS = 600
+
+
+def log_call(terms: list[str], n_hits: int, ids: list[str] | None = None) -> None:
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        row = {'at': datetime.now().isoformat(timespec='seconds'),
+               'terms': terms[:8], 'hits': n_hits}
+        # 记下命中过哪些 id：这样 audit 才能答「哪几条被查了无数次却从没用上」
+        if ids:
+            row['ids'] = ids[:8]
+        with LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    except Exception:  # noqa: BLE001 - 记不上不影响检索本身
+        pass
+
+
+def log_use(mem_id: str, note: str = '') -> bool:
+    """记一次「这条记忆真的改变了我的动作」。
+
+    为什么要单独记：`hits` 只能证明「搜到了」，不能证明「用上了」。
+    没有这一层，30 天后我只能说「这周查了 34 次」，
+    说不出「哪几条真的在关键时刻拦住了我」——那就还是记账，不是运用。
+    """
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open('a', encoding='utf-8') as f:
             f.write(json.dumps({'at': datetime.now().isoformat(timespec='seconds'),
-                                'terms': terms[:8], 'hits': n_hits}, ensure_ascii=False) + '\n')
-    except Exception:  # noqa: BLE001 - 记不上不影响检索本身
-        pass
+                                'used': mem_id, 'note': note[:80]},
+                               ensure_ascii=False) + '\n')
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def do_audit(days: int = 7) -> int:
@@ -140,20 +180,51 @@ def do_audit(days: int = 7) -> int:
         except Exception:  # noqa: BLE001 - 坏行跳过，不影响统计
             continue
     cutoff = datetime.now().timestamp() - days * 86400
-    recent = []
-    for r in rows:
+
+    def in_window(r: dict) -> bool:
         try:
-            if datetime.fromisoformat(r['at']).timestamp() >= cutoff:
-                recent.append(r)
+            return datetime.fromisoformat(r['at']).timestamp() >= cutoff
         except Exception:  # noqa: BLE001
-            continue
+            return False
+
+    recall_rows = [r for r in rows if 'used' not in r]
+    use_rows = [r for r in rows if 'used' in r]
+    recent = [r for r in recall_rows if in_window(r)]
+    recent_use = [r for r in use_rows if in_window(r)]
+
     zero = sum(1 for r in recent if not r.get('hits'))
     avg = (sum(r.get('hits', 0) for r in recent) / len(recent)) if recent else 0
     print(f'[AUDIT] 最近 {days} 天：recall {len(recent)} 次，零命中 {zero} 次，平均命中 {avg:.1f} 条')
-    if rows:
-        print(f'[AUDIT] 最近一次：{rows[-1].get("at")}  提词 {"/".join(rows[-1].get("terms") or [])}')
+
+    if recent_use:
+        uniq = {r.get('used') for r in recent_use}
+        rate = (len(recent_use) / len(recent) * 100) if recent else 0
+        print(f'[AUDIT] 其中被**真的用上** {len(recent_use)} 次，涉及 {len(uniq)} 条不同记忆，'
+              f'每次 recall 平均换来 {rate:.0f}% 的采用')
+        last = recent_use[-1]
+        print(f'[AUDIT] 最近一次采用：{last.get("at")}  {last.get("used")}  {last.get("note") or ""}')
+    else:
+        print('[AUDIT] ⚠️ 这段时间一条「用上了」的记录都没有——'
+              '查了但没改动作，等于只是路过。用 `lab recall --use <id> --note "改了什么"` 记一笔。')
+
+    # 被查了很多次却从没被用上：说明「查到了，但那一刻没响」——这类该升级成流程（A/B 类）
+    if recent:
+        seen: dict[str, int] = {}
+        for r in recent:
+            for mid in (r.get('ids') or []):
+                seen[mid] = seen.get(mid, 0) + 1
+        used_ids = {r.get('used') for r in use_rows}
+        stuck = sorted(((mid, n) for mid, n in seen.items()
+                        if mid not in used_ids and n >= 3), key=lambda x: -x[1])
+        if stuck:
+            print(f'[AUDIT] 被查到 ≥3 次却从未用上：{len(stuck)} 条（这些多半该升级成流程，见 架构文档\\记忆与流程的分工.md）')
+            for mid, n in stuck[:5]:
+                print(f'        {mid}  命中 {n} 次')
+
+    if recall_rows:
+        print(f'[AUDIT] 最近一次：{recall_rows[-1].get("at")}  提词 {"/".join(recall_rows[-1].get("terms") or [])}')
     gaps = []
-    for a, b in zip(rows, rows[1:]):
+    for a, b in zip(recall_rows, recall_rows[1:]):
         try:
             d = (datetime.fromisoformat(b['at']) - datetime.fromisoformat(a['at'])).total_seconds() / 3600
             gaps.append(d)
@@ -170,11 +241,22 @@ def main() -> int:
     ap.add_argument('--terms', nargs='+', help='手动指定检索词，跳过自动提词')
     ap.add_argument('--top', type=int, default=8, help='最多显示几条（默认 8）')
     ap.add_argument('--min', type=float, default=1.0, help='最低分（默认 1.0）')
+    ap.add_argument('--body', type=int, default=0,
+                    help='前 N 条命中直接摊正文（默认 0 = 只给标题）。'
+                         '为什么要有：v0.6.16 之后绝大多数记忆只注入一行索引，'
+                         '只给标题等于「知道有这条但看不到」，还得再搜一次。')
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--audit', action='store_true', help='看最近有没有在用')
     ap.add_argument('--days', type=int, default=7, help='--audit 的时间窗口（默认 7 天）')
+    ap.add_argument('--use', metavar='ID', help='记一笔「这条记忆真的改变了我的动作」（配合 --note）')
+    ap.add_argument('--note', default='', help='--use 的说明：改了什么动作')
     a = ap.parse_args()
 
+    if a.use:
+        ok = log_use(a.use, a.note)
+        print(('[RECALL] 已记下采用：%s %s' % (a.use, a.note)) if ok
+              else '[RECALL] 写日志失败（不影响记忆本身）')
+        return 0 if ok else 2
     if a.audit:
         return do_audit(a.days)
     if not a.task and not a.terms:
@@ -190,13 +272,23 @@ def main() -> int:
         if s >= a.min:
             hits.append((s, m, h))
     hits.sort(key=lambda x: (-x[0], -(x[1].get('importance') or 0)))
-    log_call(terms, len(hits))
+    log_call(terms, len(hits), [m['id'] for _, m, _ in hits])
 
     if a.json:
-        print(json.dumps({'terms': terms, 'total': len(mems), 'hits': [
-            {'id': m['id'], 'importance': m.get('importance'), 'score': round(s, 2),
-             'hit': h, 'title': first_line(m, 80)} for s, m, h in hits[:a.top]]},
-            ensure_ascii=False, indent=2))
+        # 2026-11-10：JSON 里原来只有标题，调用方（cmd_pre）想摊正文就只能再读一遍
+        # memories.json 或者去解析人读文本。--body N 现在同时作用于 JSON：
+        # 前 N 条的 content 一起带出来，调用方不用碰记忆库内部格式。
+        body_n = max(0, a.body)
+        out = []
+        for i, (s, m, h) in enumerate(hits[:a.top], 1):
+            item = {'id': m['id'], 'importance': m.get('importance'),
+                    'score': round(s, 2), 'hit': h, 'title': first_line(m, 80)}
+            if i <= body_n:
+                item['content'] = (m.get('content') or '').strip()
+            out.append(item)
+        print(json.dumps({'terms': terms, 'total': len(mems),
+                          'body': min(body_n, len(hits)), 'hits': out},
+                         ensure_ascii=False, indent=2))
         return 0 if hits else 1
 
     print(f'[RECALL] 提词 {len(terms)} 个: ' + ' / '.join(terms))
@@ -205,15 +297,29 @@ def main() -> int:
         print('[RECALL] 零命中——按新任务处理；如果确实做过类似的事，换个更具体的词再试一次。')
         return 1
 
+    body_n = max(0, a.body)
     for i, (s, m, h) in enumerate(hits[:a.top], 1):
         imp = m.get('importance') or 0
         print(f'  {i}. [{imp}/5] {first_line(m)}')
         print(f'       命中: {" ".join(h)}   分数 {s:.1f}   id {m["id"]}')
+        if i <= body_n:
+            full = (m.get('content') or '').strip()
+            body = full[:BODY_CHARS]
+            if len(full) > BODY_CHARS:
+                body += f'\n…（截断，全文 {len(full)} 字符）'
+            for ln in wrap_body(body):
+                print('       ' + ln)
     low = sum(1 for _, m, _ in hits if (m.get('importance') or 0) <= 3)
     if low:
         print(f'[RECALL] 其中 {low} 条是 3/5 或更低——它们平时不注入 system prompt，'
               f'只有这条命令（或 memory_search）能把它们带出来。')
-    print('要读全文: memory_search "<标题里的词>"；要读一条: memory_search "<id>"')
+    shown = min(body_n, len(hits))
+    if shown:
+        rest = len(hits) - shown
+        print(f'[RECALL] 前 {shown} 条已摊正文' +
+              (f'；其余 {rest} 条要读全文用 memory_search "<id>"' if rest else ''))
+    else:
+        print('要读全文: memory_search "<标题里的词>"；要读一条: memory_search "<id>"')
     return 0
 
 

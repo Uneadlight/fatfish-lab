@@ -60,10 +60,22 @@ RE_NRULE = re.compile(r'(\d+)\s*条主规则')
 RE_PATH = re.compile(r'([A-Za-z]:\\[^\s，。、；：:*`"\'()\[\]<>|]{3,})')
 
 
+# 2026-11-19 加：读不到的文件要记下来。
+# 原来 read() 吞掉一切异常返回 ''，下游检查遇到空文本一律 continue——
+# 于是「这份文档不见了」和「这份文档没问题」在输出上完全一样：
+# check_lab_refs / check_paths / check_counts / check_cross_docs 全部静默跳过，
+# check_counts 的两条断言还依赖计数非零，读成 0 时连它们也一起失效。
+# 现在收集起来，main() 末尾统一报「有 N 份文档没读到」。
+READ_FAILS: list[str] = []
+
+
 def read(p: Path) -> str:
     try:
         return p.read_text(encoding='utf-8')
     except Exception:
+        s = str(p)
+        if s not in READ_FAILS:
+            READ_FAILS.append(s)
         return ''
 
 
@@ -92,7 +104,20 @@ def lab_subcommands() -> set[str]:
     这个子串，正则会把 now/list/restore/undo 当成顶层（多算 4 个）。
     2026-11-03 实测：正则和 AST 都抓到 25 个，而 `lab --help` 只列 21 个，
     差的正好是 snapshot 的四个动作。加 lookbehind 排掉 `sn_sub` 这种。
+
+    2026-11-17 补：改成**运行时取 parser 的 choices**——`lab img` 是在 `img.py`
+    里用 `register(sub)` 注册的，lab.py 源码里根本没有 `sub.add_parser('img')`，
+    只扫源码就会把「文档写了 lab img」误判成漂移、把子命令数少数一个。
+    运行时失败才回退正则（保守，不因为一次 import 失败就让整个自检崩掉）。
     """
+    try:
+        import argparse as _ap
+        import lab as _lab  # 同目录，同进程时直接命中已加载模块
+        for act in _lab.build_parser()._actions:
+            if isinstance(act, _ap._SubParsersAction):
+                return set(act.choices)
+    except Exception:
+        pass
     src = read(LAB_PY)
     return set(re.findall(r"(?<![\w.])sub\.add_parser\('([\w-]+)'", src))
 
@@ -245,7 +270,8 @@ def check_cross_docs() -> list[dict]:
                 if name.startswith('http'):
                     continue
                 if not (ARCH / name).exists() and not (ROOT / name).exists() \
-                        and not (ROOT / '自进化' / name).exists():
+                        and not (ROOT / '自进化' / name).exists() \
+                        and not (ARCH / '路线库配套' / name).exists():
                     # 只在「架构文档/xxx.md」这种明确引用时报
                     if '架构文档' in line or '自进化' in line:
                         bad.append({
@@ -697,12 +723,13 @@ def _capability_fingerprint() -> dict:
     except Exception as e:
         fp['plugins'] = [f'<读不到 profile: {type(e).__name__}>']
 
-    # 2. lab 子命令（从 lab.py 的 cmd_* 函数名取，不执行 lab 自身，避免递归）
+    # 2. lab 子命令（运行时取 parser choices——2026-11-17 起，因为 `lab img` 这种
+    #    在外部模块 register(sub) 注册的子命令，lab.py 里没有对应的 cmd_img 函数；
+    #    旧的「扫 cmd_* 函数名」会静默少数一个，导致文档写对反而报漂移）
     try:
-        lab_src = read(ROOT / 'tools' / 'lab' / 'lab.py')
-        fp['lab_cmds'] = sorted(set(re.findall(r'^def cmd_([a-z][a-z0-9_]*)\s*\(', lab_src, re.M)))
+        fp['lab_cmds'] = sorted(lab_subcommands())
     except Exception as e:
-        fp['lab_cmds'] = [f'<读不到 lab.py: {type(e).__name__}>']
+        fp['lab_cmds'] = [f'<取不到子命令: {type(e).__name__}>']
 
     # 3. §0.1 规则条数
     try:
@@ -908,6 +935,7 @@ def check_pre_freshness() -> list[dict]:
         return []
     now = datetime.now()
     latest = None
+    saw_pre = False          # 日志里出现过 pre 记录（哪怕全在 60 秒内）
     for line in log.read_text(encoding='utf-8', errors='replace').splitlines():
         if '"pre"' not in line:
             continue
@@ -918,11 +946,20 @@ def check_pre_freshness() -> list[dict]:
             t = datetime.fromisoformat(rec['at'])
         except Exception:  # noqa: BLE001
             continue
+        saw_pre = True
         if (now - t).total_seconds() < 60:
             continue        # 本次自己，不算「用过」
         if latest is None or t > latest:
             latest = t
     if latest is None:
+        # 2026-11-19 修（盲审第 7 条）：第一次跑 `lab pre` 时，日志里唯一一条 pre 记录
+        # 就是本次（上面 60 秒那条把它排除了）→ 走到这里报「从没被用过」**硬漂移**，
+        # 而 `lab pre` 自己会因此返回 1。这条检查本来是用来砍掉没人用的工具的，
+        # 现在恰好在「第一次被使用」时把使用者判成失败。
+        # 区分开：日志里一条 pre 都没有 = 真没用过（该报）；有但全在 60 秒内 = 刚开始用，
+        # 期限还没开始计时，不该判失败。
+        if saw_pre:
+            return []
         return [{'kind': 'lab pre 从没被用过',
                  'claim': '除本次外，调用日志里没有任何 lab pre 记录',
                  'actual': '两天期限从没开始计时——它连一次都没被用',
@@ -933,6 +970,210 @@ def check_pre_freshness() -> list[dict]:
                  'claim': f'上次用 lab pre 是 {latest:%Y-%m-%d %H:%M}（{hours:.0f} 小时前）',
                  'actual': '超过 48 小时 → 按 2026-11-09 用户定的判据，它没通过，该砍掉',
                  'where': '~/.dsh/lab-calls.log'}]
+    return []
+
+
+def check_plugin_versions() -> list[dict]:
+    """自研插件的版本号有没有跟上来（2026-11-18 加，起因见决策日志 ver-drift-20261118）。
+
+    三条判据，按信号强度从强到弱：
+      ① CHANGELOG 最新标题的版本 ≠ package.json 的 version → **明确矛盾**（升了没改，或改漏了一处）
+      ② lib/ 里最新 mtime 比 package.json 新超过 1 天 → 提示（可能改了代码没升版本，也可能是改注释）
+      ③ 自研插件没有 CHANGELOG.md → 提示（新插件要补）
+
+    为什么要有这一组：用户 2026-11-18 指出「以前每次插件更新，多多少少都会版本型号没更新过来，
+    不止一回了」。路线库「改插件」域的判据写着「插件页能看到新版本号（不是只有文件改了）」，
+    但那句话**只是给人读的，没有任何工具去验**——这一组就是把它变成机器能验的。
+    """
+    bad = []
+    try:
+        import deploy as dep
+    except Exception:  # noqa: BLE001
+        return bad
+
+    for name in dep.SELF_BUILT:
+        d = ROOT / name
+        pkg_p = d / 'package.json'
+        if not pkg_p.exists():
+            continue
+        try:
+            ver = (json.loads(read(pkg_p)) or {}).get('version') or ''
+        except Exception:  # noqa: BLE001
+            continue
+        if not ver:
+            continue
+
+        # ① CHANGELOG 最新标题的版本
+        cl_p = d / 'CHANGELOG.md'
+        if cl_p.exists():
+            cl_ver = ''
+            for line in (read(cl_p) or '').splitlines():
+                if line.startswith('##'):
+                    m = re.search(r'v?(\d+\.\d+\.\d+)', line)
+                    if m:
+                        cl_ver = m.group(1)
+                    break
+            if cl_ver and cl_ver != ver:
+                bad.append({
+                    'kind': '版本号与 CHANGELOG 不一致',
+                    'claim': f'`{name}` 的 package.json 写 {ver}',
+                    'actual': f'CHANGELOG 最新标题是 {cl_ver}',
+                    'where': f'{name}/CHANGELOG.md',
+                })
+        else:
+            bad.append({
+                'kind': '自研插件缺 CHANGELOG',
+                'claim': f'`{name}` 是自研插件（SELF_BUILT 里的一项）',
+                'actual': f'没有 {name}/CHANGELOG.md',
+                'where': name,
+                'soft': True,
+            })
+
+        # ④ 我的能力清单.md 里写没写对（2026-11-18 加）
+        #    2026-11-18 同一件事第二次：①②③ 全报 OK，但能力清单里 4 处版本号是旧的
+        #    （memory 0.6.17 / evolve 0.1.7 / stickers 0.1.3 / workflow 0.3.16），我手工翻出来的。
+        #    只查 SELF_BUILT：外部插件（cc-safety-net / dshmarket）的版本我控制不了，
+        #    那几行是参考资料不是承诺，跟着 npm 升级去改文档没有收益。
+        cap_p = ARCH / '我的能力清单.md'
+        if cap_p.exists():
+            try:
+                cap_text = read(cap_p) or ''
+            except Exception:  # noqa: BLE001
+                cap_text = ''
+            m = re.search(r'\|\s*`' + re.escape(name) + r'`\s*\|\s*\**(\d+\.\d+\.\d+)\**', cap_text)
+            if m and m.group(1) != ver:
+                bad.append({
+                    'kind': '能力清单里的版本号过期',
+                    'claim': f'`架构文档/我的能力清单.md` 写 `{name}` 是 {m.group(1)}',
+                    'actual': f'package.json 是 {ver}',
+                    'where': '架构文档/我的能力清单.md',
+                    'soft': True,
+                })
+
+        # ② 代码比 package.json 新（弱信号，只提示）
+        lib = d / 'lib'
+        if lib.is_dir():
+            try:
+                newest = max((p.stat().st_mtime for p in lib.rglob('*') if p.is_file()), default=0)
+                pkg_m = pkg_p.stat().st_mtime
+            except OSError:
+                newest = pkg_m = 0
+            if newest and pkg_m and newest > pkg_m + 86400:
+                days = int((newest - pkg_m) / 86400)
+                bad.append({
+                    'kind': '代码比 version 新（可能忘升版本）',
+                    'claim': f'`{name}` 的 package.json 还写着 {ver}',
+                    'actual': f'lib/ 里最新改动比 package.json 新 {days} 天',
+                    'where': f'{name}/lib/',
+                    'soft': True,
+                })
+    return bad
+
+
+def check_dir_classification() -> list[dict]:
+    """现役/历史目录分类表有没有跟上磁盘（2026-11-18 加，第二版）。
+
+    只查一件事：顶层目录没在分类表里登记 → soft（新目录出现时要归类）。
+
+    2026-11-18 第二版：**删掉了原来那条「现役目录里 mtime > 90 天且零引用 → 可能已退场」**。
+    原因是判据反了——用户 m17959 原话：「这种一直没有利用的都算现役，直接留在现役的
+    目录当中就可以。保不起哪天要用到。你要是把它归到历史那一档，那就有点麻烦了。」
+    「没用过」不等于「该退场」；归历史有成本（要挪、要改路径），所以默认留现役。
+    退场的唯一理由是「明确被替代」（06-design 是现役 SKILL.md 的旧副本）或「明确废弃」
+    （10-audit lab 里无对应）——这两个机器判不了，要我看 / 要用户拍板。
+
+    所以这一组只负责**目录级**的变化（新目录出现），不负责**文件级**的老化。
+    """
+    bad = []
+    plan_p = ARCH / '目录分类.json'
+    if not plan_p.exists():
+        return [{
+            'kind': '没有目录分类表',
+            'claim': '现役/历史目录分类表应该存在',
+            'actual': f'{plan_p} 不存在 → 新目录没人归类',
+            'where': '架构文档/目录分类.json',
+            'soft': True,
+        }]
+    try:
+        plan = json.loads(read(plan_p)) or {}
+    except Exception as e:  # noqa: BLE001
+        return [{
+            'kind': '目录分类表读不了',
+            'claim': '目录分类.json 应该是合法 JSON',
+            'actual': str(e),
+            'where': '架构文档/目录分类.json',
+        }]
+
+    known: dict[Path, str] = {}
+    for cls, m in plan.items():
+        if cls.startswith('_') or not isinstance(m, dict):
+            continue
+        for p in m:
+            known[Path(p)] = cls
+
+    # ① 顶层目录没归类
+    try:
+        tops = [p for p in ROOT.iterdir() if p.is_dir()]
+    except OSError:
+        tops = []
+    for d in tops:
+        if d.name.startswith('.git') or d.name == '.dsh':
+            continue
+        if d not in known:
+            bad.append({
+                'kind': '目录没归类',
+                'claim': '每个顶层目录都该在 目录分类.json 里标明现役/历史',
+                'actual': f'`{d.name}` 不在表里 → 它是现役还是历史？',
+                'where': '架构文档/目录分类.json',
+                'soft': True,
+            })
+
+    # 原第 ② 条「现役目录里 mtime > 90 天且零引用 → 可能已退场」已于 2026-11-18 删除：
+    # 用户 m17959「这种一直没有利用的都算现役……你要是把它归到历史那一档，那就有点麻烦了。」
+    # 「没用过」不等于「该退场」。文件级的老化由人判断（见 架构文档/文件分类.json），机器只查目录级。
+    return bad
+
+
+def check_requirement_freshness() -> list[dict]:
+    """需求清单多久没整理过了（2026-11-18 加，第 19 组）。
+
+    只查「多久没看」，查不了「漏了哪条」——新要求进表仍要靠人。
+    判据：文件头的 `最近一次整理 YYYY-MM-DD` 距今超过 30 天 → soft。
+
+    为什么是 30 天：这份表是「大改动前逐条对照」用的。一个月都没整理过，
+    说明这段时间用户提的要求（全进了记忆）没进这张表——它就退化成快照了。
+    这正是用户 2026-11-18 批评的那个病：「需要长期维护的当一次性的做」。
+    """
+    p = ARCH / '需求清单.md'
+    if not p.exists():
+        return [{'kind': '需求清单不在',
+                 'claim': str(p),
+                 'actual': '文件不存在',
+                 'where': '架构文档/',
+                 'soft': True}]
+    text = read(p)
+    m = re.search(r'最近一次整理\s*(\d{4})-(\d{2})-(\d{2})', text)
+    if not m:
+        return [{'kind': '需求清单没有整理日期',
+                 'claim': '文件头要写 `最近一次整理 YYYY-MM-DD`',
+                 'actual': '找不到这个格式的日期',
+                 'where': '架构文档/需求清单.md',
+                 'soft': True}]
+    try:
+        d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return [{'kind': '需求清单日期非法',
+                 'claim': m.group(0),
+                 'actual': '日期解析失败',
+                 'where': '架构文档/需求清单.md',
+                 'soft': True}]
+    days = (datetime.now() - d).days
+    if days > 30:
+        return [{'kind': '需求清单可能漏了新要求',
+                 'claim': '最近一次整理 {0:%Y-%m-%d}'.format(d),
+                 'actual': '{0} 天没整理（阈值 30 天）'.format(days),
+                 'where': '架构文档/需求清单.md',
+                 'soft': True}]
     return []
 
 
@@ -952,7 +1193,36 @@ GROUPS = [
     ('路线清单体检：重复/死路径/空壳/代号（判臃肿，不判条数）', check_route_hygiene),
     ('自研插件部署：源码改了但没 lab deploy', check_deploy_sync),
     ('lab pre 时效：两天没被用过就该砍', check_pre_freshness),
+    ('自研插件版本号：CHANGELOG 与 package.json 一致', check_plugin_versions),
+    ('目录分类：新目录没归类', check_dir_classification),
+    ('需求清单时效：多久没整理过', check_requirement_freshness),
 ]
+
+
+BLOCK_LOG = ROOT / '架构文档' / 'selfcheck-拦截记录.jsonl'
+
+
+def _log_block(hard_total: int, report) -> None:
+  """2026-11-18 加：selfcheck 跑了 664 次，从没记过「它拦住了什么」。
+
+  拦住只打在屏幕上，关掉窗口就没了 —— 于是「这检查到底有没有用」永远答不出来。
+  这里把每次有硬漂移的拦截落一行，事后能统计「哪个 kind 反复出现、哪个从没出现」。
+  """
+  try:
+    BLOCK_LOG.parent.mkdir(parents=True, exist_ok=True)
+    items = []
+    for g in report:
+      for it in g['items']:
+        if it.get('soft'):
+          continue
+        items.append({'group': g['group'], 'kind': it.get('kind'),
+                      'claim': it.get('claim'), 'where': it.get('where')})
+    rec = {'at': datetime.now().isoformat(timespec='seconds'),
+           'hard': hard_total, 'items': items[:20]}
+    with BLOCK_LOG.open('a', encoding='utf-8') as f:
+      f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+  except Exception:
+    pass
 
 
 def main(argv=None) -> int:
@@ -962,6 +1232,7 @@ def main(argv=None) -> int:
     ap.add_argument('--update-fingerprint', action='store_true',
                     help='审完 §0.1 后调用：把当前能力状态记为新的基准（第 13 组用）')
     a = ap.parse_args(argv)
+    READ_FAILS.clear()  # 每次运行从零开始记，别把上一次的算进来
 
     if a.update_fingerprint:
         cur = _capability_fingerprint()
@@ -1020,6 +1291,19 @@ def main(argv=None) -> int:
             print('修法：改文档里的字，或者改能力去匹配文档（通常前者）。')
 
     hard_total = sum(1 for g in report for it in g['items'] if not it.get('soft'))
+    # 2026-11-19 加：有文档读不到，算漂移。
+    # 它们的相关检查本轮全被跳过——「没查到问题」不等于「没问题」。
+    if READ_FAILS:
+        print()
+        print(f'⚠️ 有 {len(READ_FAILS)} 份文档没读到，与它们相关的检查本轮全部跳过：')
+        for s in READ_FAILS[:10]:
+            print(f'   {s}')
+        if len(READ_FAILS) > 10:
+            print(f'   …… 还有 {len(READ_FAILS) - 10} 份')
+        print('   读不到不等于没问题：先确认这些文件该不该在。')
+        hard_total += len(READ_FAILS)
+    if hard_total:
+        _log_block(hard_total, report)
     return 0 if hard_total == 0 else 1
 
 
