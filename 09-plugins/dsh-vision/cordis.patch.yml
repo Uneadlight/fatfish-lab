@@ -1,0 +1,7 @@
+# dsh-vision —— DSH bundle patch
+#
+# 把插件挂进当前 profile 的配置树。工具（vision_describe）由 lib/index.js 注册，
+# 这里只需要一行 insert；`name` 必须与 package.json 的 name 完全一致。
+- insert:
+    - id: dsh-vision
+      name: "@un10086/dsh-vision"
