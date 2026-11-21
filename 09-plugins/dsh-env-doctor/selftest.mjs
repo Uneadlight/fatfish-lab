@@ -15,7 +15,7 @@ const ctx = {
     return typeof cleanup === "function" ? cleanup : () => {};
   },
 };
-apply(ctx, { workspace: "D:\work" });
+apply(ctx, { workspace: "E:\\DS公作区" });
 
 const def = tools.env_doctor;
 if (!def) throw new Error("tool not registered");
