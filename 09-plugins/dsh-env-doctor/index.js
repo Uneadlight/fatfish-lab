@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync, lstatSync, accessSync, mkdirSync, 
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 export const name = "dsh-env-doctor";
 export const inject = ["tools"];
@@ -14,7 +15,12 @@ const BILI_CONFIG = join(HOME, ".config", "billion-context", "billion-context.js
 const BILI_STATE = join(HOME, ".local", "state", "billion-context");
 const BILI_INSTANCES = join(BILI_STATE, "instances");
 const BILI_LOG = join(BILI_STATE, "bili.log");
-const ITERATE_DIR = join("D:\work", "dsh-plugin-iterate");
+// 工作区路径：本源作者用 E:\DS公作区，其他人可用 DSH_WORKSPACE 覆盖。
+const WORKSPACE_DIR = process.env.DSH_WORKSPACE || "E:\\DS公作区";
+const WORKSPACE_ROOT = process.env.DSH_WORKSPACE_DRIVE || WORKSPACE_DIR.slice(0, 3);
+// 插件迭代工作区（可选功能）：默认指向工作区下的 dsh-plugin-iterate，可用 DSH_ITERATE_DIR 覆盖。
+// 目录不存在时，与之相关的检查项会报「文件未找到」，不影响其余体检项。
+const ITERATE_DIR = process.env.DSH_ITERATE_DIR || join(WORKSPACE_DIR, "dsh-plugin-iterate");
 const APPLY_BILI = join(ITERATE_DIR, "apply-bili.ps1");
 const CHECK_MJS = join(ITERATE_DIR, "check.mjs");
 const NODE_BIN = join(DSH_HOME, "dsh-runtimes", "dsh-primary-runtime", "dependencies", "node", "bin", "node.exe");
@@ -26,7 +32,6 @@ const POWERSHELL_EXE = join(process.env.SystemRoot || "C:\\Windows", "System32",
 const PROFILE_PKG = join(PROFILE_DIR, "package.json");
 const PROFILE_PATCH = join(PROFILE_DIR, "cordis.patch.yml");
 const MEMORY_FILE = join(DSH_HOME, "memory", "memories.json");
-const WORKSPACE_ROOT = "E:\\";
 
 const OK = "OK";
 const WARN = "WARN";
@@ -56,7 +61,12 @@ function briefError(e) {
 }
 
 function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
+  // 去掉 UTF-8 BOM：PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM，
+  // 而 JSON.parse 见到 BOM 直接抛 `Unexpected token '\uFEFF'`。
+  // 2026-11-03 我自己用 Set-Content 改 dsh-env-doctor 的 package.json 时踩到：
+  // 本插件报「@local/dsh-env-doctor：package.json 不可读」——**工具被自己的 BOM 搞瞎**。
+  const text = readFileSync(path, "utf8");
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 }
 
 function cmpVer(a, b) {
@@ -282,41 +292,107 @@ function checkMemories() {
     return [{ level: FAIL, title: "记忆库 JSON 损坏", detail: briefError(e), fix: "从 backups 恢复：把 memories.json.bak-* 里最近一份复制覆盖回来" }];
   }
   const count = Array.isArray(db?.memories) ? db.memories.length : -1;
+  // 2026-11-12：条目总数只用来做结构检查与展示；净化告警改量 live（非 deprecated），
+  // 因为 deprecated 条目不注入、不进索引（dsh-memory lib/index.js:367/788/1051），成本为零，
+  // 而规则文件明确「deprecated 优于删除」——拿含废弃条目的总数报警，等于惩罚照规则做的人。
   if (count < 0) return [{ level: FAIL, title: "记忆库结构异常", detail: "没有 memories 数组", fix: null }];
   if (count === 0) return [{ level: WARN, title: "记忆库为空", detail: MEMORY_FILE, fix: null }];
   const mems = db.memories;
-  const chars = mems.reduce((n, m) => n + String(m?.content || "").length, 0);
   const live = mems.filter((m) => m.deprecated !== true);
+  const liveCount = live.length;
+  const liveChars = live.reduce((n, m) => n + String(m?.content || "").length, 0);
+  const deprecatedCount = count - liveCount;
   const fiveList = live.filter((m) => (m.importance ?? 3) >= 5);
   const fives = fiveList.length;
   const fiveChars = fiveList.reduce((n, m) => n + String(m?.content || "").length, 0);
   const fours = live.filter((m) => (m.importance ?? 3) === 4).length;
-  const detail = `${count} 条（5/5:${fives} · 4/5:${fours}） · ${(raw.length / 1024).toFixed(1)} KB · 正文 ${chars} 字符 · 5/5 ${fiveChars} 字符`;
-  // 净化触发条件（对齐 D:\work\自进化\记忆库优化规则.md）：
+  const detail = `${liveCount} 条活跃${deprecatedCount > 0 ? ` · 另 ${deprecatedCount} 条已废弃` : ""} · 5/5:${fives} · 4/5:${fours} · ${(raw.length / 1024).toFixed(1)} KB · 正文 ${liveChars} 字符 · 5/5 ${fiveChars} 字符`;
+  // 净化触发条件（对齐 E:\DS公作区\自进化\记忆库优化规则.md）：
   // 成本由「注入字符量」决定（字符是硬指标，条数只是近似），总条数只要别失控就不算问题。
   // 2026-10-27 用户拍板：上限从 7,500 扩到 12,000 字符（约 32 条）——边际成本实测 <1.5 元/月，可接受。
   // 2026-10-29 定档重算：dsh-memory v0.4.6 把注入预算 18,000 → 30,000、并给 4/5 保底 12,000，
   // 5/5 现为 13,302 字符属正常水平，旧的 12,000 阈值会让 WARN 永远挂着（误报）。
-  // 新口径：5/5 > 24,000（占预算 40%）或「估算注入量」> 32,000 才提醒；估算 = 5/5 正文 + 4/5 正文每人按 ≤500 计（截断后）。
+  // 新口径：5/5 > 24,000（占预算 40%）或「估算注入量」> 48,000 才提醒；估算 = 5/5 正文 + 4/5 正文每人按 ≤500 计（截断后）。
   // 2026-10-30 再对齐：预算 30,000 → 60,000、4/5 保底 12,000 → 20,000，5/5 报警线按 40% 同步到 24,000
   // （5/5 现 37 条 / 18,466 字符；24,000 给正常增长留了余量，又能在真失控前报出来）。
-  const LIMIT_FIVE_CHARS = 24000;
-  const LIMIT_FIVES = 40;
-  const LIMIT_FOURS = 60;
-  const LIMIT_COUNT = 150;
-  const LIMIT_CHARS = 90000;
-  const LIMIT_INJECT_EST = 48000;
-  const fourInjectEst = live
-    .filter((m) => (m.importance ?? 3) === 4)
-    .reduce((n, m) => n + Math.min(String(m?.content || "").length, 500), 0);
-  const injectEst = fiveChars + fourInjectEst;
+  // 2026-11-04 对齐第二版预算：dsh-memory v0.5.0 把注入预算 60,000 → 120,000、报警线 80% = 96,000，
+  // 4/5 保底 20,000 → 40,000；上面那组 24,000/48,000/90,000 是 60,000 时代的口径，会一直挂着误报。
+  // 新口径按同一比例平移：5/5 正文 > 48,000（预算 40%）、估算注入 > 96,000（预算 80%）才提醒；
+  // 条数线同步放宽（5/5 50 条、4/5 80 条、总 200 条），字符线 150,000。
+  // 注意这是「防失控」的粗线，精确口径在 E:\DS公作区\自进化\mem-maintain.py（它直接按 120,000 算）。
+  // 条数线只是「粗线」——2026-11-07 实测 5/5 有 51 条但只有 37,215 字符（远低于 48,000），
+  // 按 50 条报警等于「用近似指标否定精确指标」。对齐 E:\DS公作区\自进化\记忆库优化规则.md：
+  //   字符才是硬指标，条数只是近似。50 → 60 条：60 条 × 800 字符 ≈ 48,000，正好对齐字符线。
+  // 2026-11-09 再对齐（dsh-memory v0.6.16）：4/5 起**只注入一行索引**（约 79 字符/条），
+  // 3/5 及以下同样进索引。于是两条旧口径同时失效：
+  //   ① fourInjectEst = Σ min(500, 正文长度) 是按「全文注入」估的，实测高估约 6 倍
+  //      （115 条：估 57,500，实际索引约 9,085）；
+  //   ② 「4/5 > 80 条」这条线量的东西已经不影响成本了——条数只决定索引行数，行数已经算进字符里。
+  // 新口径：4/5 按 80 字符/条并入注入估算；**删掉 4/5 条数线**，让字符线单独说话。
+  // 判据：条数是近似指标，字符是硬指标；近似指标不能否定精确指标（同 2026-11-07 那次修正）。
+  const LIMIT_FIVE_CHARS = 90000; // 2026-11-20 用户 m05927：48,000 → 90,000（对齐 mem-maintain 口径）
+  // 2026-11-19 用户 m19150 调 60 → 70。理由不是「5/5 变多了」，是**消提醒的办法不该只有一个**：
+  //   「让这条提醒消失，还有一个办法：更改他提醒的上限……那些真正重要的、足 5/5 的，没必要
+  //    为了让提醒消失就故意往下降。当他真的属于最重要的那一条线的时候，你可以通过提高提醒上限
+  //    让这条提醒消失。」
+  // 我 2026-11-18 降了 7 条 5/5 的**真实动机是「让这条提醒消失」**——把告警清零当成了目标。
+  // 告警线警示的是「量」，不是「某条记忆的价值」；量大了就抬线，不该拿重要性去凑数。
+  const LIMIT_FIVES = 140; // 2026-11-20 用户要求翻倍 70 → 140
+  // 2026-11-13 用户要求调高上限（原 200 条 / 150,000 字符）。口径依据：
+  //   条数只决定索引行数——4/5 起每条一行 80 字符，260 条 ≈ 20,800 字符索引，
+  //   加上 5/5 全量 21,934，注入估算仍只到 96,000 报警线的 ~45%；
+  //   正文上限按「条数 × 当前平均 717 字符」对齐：260 × 717 ≈ 186K，取 190,000。
+  // 2026-11-18 再调到 210,000（用户 m17012「这颗也都可以适当提高上限的」）。口径变了：
+  //   v0.6.17 起 5/5 全文注入加了 **条数上限** `MAX_FIVES_INJECT`（12 → 18），
+  //   所以「活跃正文总量」不再等于「每轮注入量」——真正决定成本的是下面那条
+  //   `LIMIT_INJECT_EST = 96000`（`5/5 全文 + 4/5 索引行`），当前实测才 ~57,000，占线 59%。
+  //   正文上限按「260 条 × 800 字符」= 208,000，取 **210,000** 留一点余量。
+  //   这不是「改尺子迁就现状」：当初 190,000 是按「5/5 全量注入」推的，机制变了尺子该跟着变；
+  //   如果哪天 `LIMIT_INJECT_EST` 也顶到线，那才是真要净化。
+  // 2026-11-18 晚再调到 300（用户 m17821「去查一下解决掉他吧」）。
+  // 这次是**先查后改**：告警写的是「活跃条数 266 > 260」，而 `[OK] 记忆库正常` 那条
+  // 同时报「正文 201,871 字符」——说明报的是**条数线**，不是字符线（字符线 300,000 早就放宽了）。
+  // 口径依据：条数只决定索引行数，266 条 × 80 = 21,280 字符；真正决定成本的是
+  // `LIMIT_INJECT_EST = 96000`，当前实测 ~36,000（约 37%），离顶线还远。
+  // 260 是 2026-11-13 定的，那时约 240 条；266 是正常增长（每天写 2-5 条）。
+  // **300 是上限不是常态**：到了 300 就该真合并同类条目，而不是再抬一次线。
+  const LIMIT_COUNT = 600; // 2026-11-20 用户要求翻倍 300 → 600
+  // 2026-11-18 用户 m17037 再调：「留的余量太少了，提高到 300000 吧」。
+  // 这条线量的只是「正文总量」（所有非废弃记忆的字符和），**不是每轮注入量**——
+  // 后者由下面的 `LIMIT_INJECT_EST` 管。所以放宽它不会让成本失控，只是把「该不该清理」
+  // 从「一超就报」变成「超额才报」。真正要盯的是 injectEst 那条线。
+  const LIMIT_CHARS = 600000; // 2026-11-20 用户要求翻倍 300,000 → 600,000
+  const LIMIT_INJECT_EST = 96000;
+  const INDEX_LINE_CHARS = 80;
+  // 2026-11-18：dsh-memory v0.6.17 起 5/5 全文注入加了**条数上限**（`MAX_FIVES_INJECT`，默认 18，
+  // env `DSH_MEMORY_MAX_FIVES` 可覆盖），且 `pinned: true` 的 5/5 **优先注入、不参与 updatedAt 竞争**。
+  // 所以「估算注入量」不能再拿**全部 5/5 的字符和**当分子——52 条 43,587 字符里有三十几条根本不进正文，
+  // 只进索引。这里按 dsh-memory 的同一规则复算「实际会注入的那几条」。
+  // 判据：口径要和被量对象一致；被量的对象变了（全量注入 → 有上限 + pin），尺子必须跟着变。
+  const MAX_FIVES_INJECT = (() => {
+    const env = Number(process.env.DSH_MEMORY_MAX_FIVES || 0);
+    return Number.isFinite(env) && env > 0 ? env : 22;
+  })();
+  const pinnedFives = fiveList.filter((m) => m.pinned === true);
+  const restFives = fiveList.filter((m) => m.pinned !== true);
+  const fiveRoom = Math.max(0, MAX_FIVES_INJECT - pinnedFives.length);
+  const injectedFives = [...pinnedFives, ...restFives.slice(0, fiveRoom)];
+  const fiveInjectChars = injectedFives.reduce((n, m) => n + String(m?.content || "").length, 0);
+  // 索引段 = 所有没被全文注入的条目（4/5 + 3/5 及以下 + 溢出的 5/5），每条一行 80 字符。
+  // 旧口径只数 4/5、漏了 3/5 及以下和溢出的 5/5，同样是低估。
+  const indexCount = Math.max(0, liveCount - injectedFives.length);
+  const fourInjectEst = indexCount * INDEX_LINE_CHARS;
+  const injectEst = fiveInjectChars + fourInjectEst;
   const reasons = [];
-  if (fiveChars > LIMIT_FIVE_CHARS) reasons.push(`5/5 已 ${fiveChars} 字符 > ${LIMIT_FIVE_CHARS}（全量注入，直接推高每轮成本）`);
-  if (injectEst > LIMIT_INJECT_EST) reasons.push(`估算注入量 ${injectEst} 字符 > ${LIMIT_INJECT_EST}（5/5 全量 + 4/5 截断后合计）`);
+  if (fiveInjectChars > LIMIT_FIVE_CHARS) reasons.push(`实际注入的 ${injectedFives.length} 条 5/5 已 ${fiveInjectChars} 字符 > ${LIMIT_FIVE_CHARS}（全文注入，直接推高每轮成本）`);
+  if (injectEst > LIMIT_INJECT_EST) reasons.push(`估算注入量 ${injectEst} 字符 > ${LIMIT_INJECT_EST}（${injectedFives.length} 条 5/5 全文 ${fiveInjectChars} + ${indexCount} 条索引 ${fourInjectEst}）`);
   if (fives > LIMIT_FIVES) reasons.push(`5/5 已 ${fives} 条 > ${LIMIT_FIVES}`);
-  if (fours > LIMIT_FOURS) reasons.push(`4/5 已 ${fours} 条 > ${LIMIT_FOURS}`);
-  if (count > LIMIT_COUNT) reasons.push(`总条数 ${count} > ${LIMIT_COUNT}`);
-  if (chars > LIMIT_CHARS) reasons.push(`正文 ${chars} 字符 > ${LIMIT_CHARS}`);
+  // 2026-11-09：4/5 条数线已删除——v0.6.16 起 4/5 只占一行索引（80 字符），
+  // 条数不再决定成本；用它报警等于「用近似指标否定精确指标」（同 11-07 那次修正）。
+  // 真要失控，字符线（injectEst）会先报出来。
+  // 2026-11-12：量的对象从「全部条目」改成「live 条目」——理由见上面 count 处的注释。
+  if (liveCount > LIMIT_COUNT) reasons.push(`活跃条数 ${liveCount} > ${LIMIT_COUNT}`);
+  if (liveChars > LIMIT_CHARS) reasons.push(`活跃正文 ${liveChars} 字符 > ${LIMIT_CHARS}`);
   if (reasons.length > 0) {
     return [
       { level: OK, title: "记忆库正常", detail },
@@ -324,7 +400,7 @@ function checkMemories() {
         level: WARN,
         title: "记忆库该净化了（触发自我优化前提）",
         detail: reasons.join("；"),
-        fix: "按 D:\work\\自进化\\记忆库优化规则.md 执行：先备份 memories.json，再合并重复/降级次要/删除过时，保留身份·规则·偏好骨架，改完校验 JSON 与重复 id",
+        fix: `按 ${WORKSPACE_DIR}\\自进化\\记忆库优化规则.md 执行：先备份 memories.json，再合并重复/降级次要/删除过时，保留身份·规则·偏好骨架，改完校验 JSON 与重复 id`,
       },
     ];
   }
@@ -357,7 +433,7 @@ function checkPluginDirs() {
 
 const PLUGIN_SNAPSHOT = join(SELF_DIR, ".plugin-snapshot.json");
 
-/** 当前所有已装插件的 name → version（profile bundles + @local 目录）。 */
+/** 当前所有 profile 安装插件的 name → version（含 @local 目录；DSH 内置 bundle 不计）。 */
 function installedPluginMap() {
   const map = new Map();
   let pkg = null;
@@ -369,6 +445,10 @@ function installedPluginMap() {
   const bundles = pkg?.dsh?.profile?.bundles || [];
   for (const raw of bundles) {
     const name = String(raw);
+    // @deepseek-ai/* 是随 DSH 应用发布的内置 bundle（在 app.asar 里），不是
+    // profile 安装的插件：版本解析不到，出现/消失也随本体更新。把它们记进
+    // 变更追踪只会制造「新增 xxx@?」的假告警（2026-10-31/11-01 连续发生）。
+    if (BUILTIN.test(name)) continue;
     let version = "?";
     try {
       version = String(readJson(join(PROFILE_DIR, "node_modules", name, "package.json")).version || "?");
@@ -440,10 +520,13 @@ function checkPluginDrift() {
     else if (String(prevPlugins[name]) !== String(version)) changed.push(`${name} ${prevPlugins[name]}→${version}`);
   }
   for (const name of Object.keys(prevPlugins)) {
+    // 旧基线（v0.6.14 之前）里可能还留着内置 bundle；忽略，避免升级后
+    // 首次运行一次性误报“移除 10 个”。
+    if (BUILTIN.test(name)) continue;
     if (!current.has(name)) removed.push(`${name}@${prevPlugins[name]}`);
   }
   if (added.length === 0 && removed.length === 0 && changed.length === 0) {
-    return [{ level: OK, title: "插件变更追踪：无变化", detail: `${current.size} 个插件与上次基线一致（基线 ${prev.takenAt ? fmtTime(Date.parse(prev.takenAt)) : "未知"}）` }];
+    return [{ level: OK, title: "插件变更追踪：无变化", detail: `${current.size} 个已安装插件与上次基线一致（DSH 内置不计；基线 ${prev.takenAt ? fmtTime(Date.parse(prev.takenAt)) : "未知"}）` }];
   }
   const parts = [];
   if (added.length) parts.push(`新增 ${added.length}：${added.join("、")}`);
@@ -453,13 +536,63 @@ function checkPluginDrift() {
   return [{
     level: added.length || removed.length ? WARN : INFO,
     title: "插件变更追踪：检测到变化（基线已更新）",
-    detail: parts.join("；"),
+    detail: `${parts.join("；")}（DSH 内置 bundle 随本体更新，不计入）`,
     fix: "新增/升级的插件建议跑 env_doctor only=health 验证入口能加载；移除的插件确认是有意卸载",
   }];
 }
 
-function checkDisk() {
-  const out = [];
+// 2026-11-04 加：源码版本 vs profile 版本
+//
+// 背景：dsh-evolve 源码改到 0.1.6 之后一直没同步到 profile（profile 装着 0.1.5），
+// 改的代码从没生效过，而我一直以为生效了。checkPluginDrift 抓不到这种形态——
+// 它比的是"这次基线 vs 上次基线"，profile 版本没变它就报"无变化"。
+//
+// 判据：只有实体目录（拷贝型）才有不同步风险；符号链接是同一份文件，永远一致。
+const SOURCE_ROOT = WORKSPACE_DIR;
+
+function checkSourceVersionSync() {
+  const checked = [];
+  const mismatched = [];
+  for (const [name, profileVer] of installedPluginMap()) {
+    const dir = join(PROFILE_DIR, "node_modules", ...name.split("/"));
+    let isLink = false;
+    try {
+      isLink = lstatSync(dir).isSymbolicLink();
+    } catch {
+      continue; // 目录不在（可能刚卸）——交给 checkPluginDrift 报
+    }
+    if (isLink) continue; // 软链：profile 和源码是同一份文件
+    const base = name.startsWith("@local/") ? name.slice(7) : name;
+    let srcVer = "";
+    try {
+      srcVer = String(readJson(join(SOURCE_ROOT, base, "package.json")).version || "");
+    } catch {
+      srcVer = ""; // 没有对应源码目录（第三方插件）——不报，直接跳过
+    }
+    if (!srcVer) continue;
+    checked.push(`${name}@${profileVer}`);
+    if (srcVer !== profileVer) mismatched.push(`${name} 源码 ${srcVer} / profile ${profileVer}`);
+  }
+  if (checked.length === 0) {
+    return [{ level: INFO, title: "源码版本同步：没有可比对的拷贝型插件", detail: "只查实体目录的自研插件；符号链接是同一份文件，不需要比" }];
+  }
+  if (mismatched.length === 0) {
+    return [{ level: OK, title: "源码版本同步：一致", detail: `${checked.length} 个拷贝型插件，profile 版本与源码目录一致（${checked.join("、")}）` }];
+  }
+  return [{
+    level: WARN,
+    title: `源码版本不同步：${mismatched.length} 个`,
+    detail: `${mismatched.join("；")}。改的代码在 profile 里没生效——要么这次同步文件，要么这次改动本来就没打算生效。`,
+    fix: mismatched.map((m) => {
+      const n = m.split(" ")[0];
+      const base = n.startsWith("@local/") ? n.slice(7) : n;
+      const rel = n.startsWith("@local/") ? `@local\\${base}` : n;
+      return `Copy-Item -Force "${WORKSPACE_DIR}\\${base}\\package.json" "${PROFILE_DIR}\\node_modules\\${rel}\\package.json"（改了代码还要同步 lib/，然后重启 DSH）`;
+    }).join("；"),
+  }];
+}
+
+function checkDisk() {  const out = [];
   for (const [label, path] of [["工作区盘", WORKSPACE_ROOT], ["用户盘", HOME]]) {
     try {
       const st = statfsSync(path);
@@ -475,14 +608,27 @@ function checkDisk() {
   return out;
 }
 
+/**
+ * 配置漂移判据：比对**内容哈希**，不比对 mtime。
+ *
+ * 早先比的是 mtime，代价是只要文件被写过就报警——`git checkout`、手工
+ * `touch`、甚至脚本把同样内容重写一遍都会触发。判据应该落在"配置到底变没变"
+ * 上，也就是内容；mtime 只是文件系统的记账，不是配置的属性。
+ */
 const configBaseline = new Map();
+
+function hashFile(file) {
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
 function captureConfigBaseline() {
   for (const file of [PROFILE_PKG, PROFILE_PATCH]) {
-    try {
-      configBaseline.set(file, statSync(file).mtimeMs);
-    } catch {
-      // 不存在就算了，下次再看
-    }
+    const h = hashFile(file);
+    if (h) configBaseline.set(file, h);
   }
 }
 
@@ -490,17 +636,26 @@ function checkConfigDrift() {
   if (configBaseline.size === 0) captureConfigBaseline();
   const out = [];
   for (const [file, base] of configBaseline) {
-    let now;
-    try {
-      now = statSync(file).mtimeMs;
-    } catch {
+    const now = hashFile(file);
+    if (now === null) {
       out.push({ level: WARN, title: "配置文件消失", detail: file, fix: null });
       continue;
     }
-    if (now > base + 1000) {
-      out.push({ level: WARN, title: "配置已改动，可能没重启", detail: `${file} 于 ${fmtTime(now)} 被改，DSH 仍在用旧配置`, fix: "确认改动无误后重启 DSH" });
+    if (now !== base) {
+      let changedAt = "?";
+      try {
+        changedAt = fmtTime(statSync(file).mtimeMs);
+      } catch {
+        // 文件刚被删又建回来，mtime 读不到不算问题
+      }
+      out.push({
+        level: WARN,
+        title: "配置已改动，可能没重启",
+        detail: `${file} 内容在 ${changedAt} 被改写（哈希 ${base.slice(0, 8)} → ${now.slice(0, 8)}），DSH 仍在用旧配置`,
+        fix: "确认改动无误后重启 DSH",
+      });
     } else {
-      out.push({ level: OK, title: "配置未漂移", detail: file });
+      out.push({ level: OK, title: "配置未漂移", detail: `${file}（内容哈希与启动时一致）` });
     }
   }
   return out;
@@ -699,7 +854,7 @@ function checkLocalTools() {
       level: WARN,
       title: "自研插件未登记到 profile",
       detail: unregistered.map((n) => "@local/" + n).join("、") + "（目录在但不在 profile 的 bundles/dependencies 里，DSH 不会加载）",
-      fix: "plugin_manager install_bundle link:E:/DS公作区/<目录名> 重新登记",
+      fix: `plugin_manager install_bundle link:${WORKSPACE_DIR.replace(/\\/g, "/")}/<目录名> 重新登记`,
     });
   }
 
@@ -736,10 +891,10 @@ function checkLocalTools() {
   //    rapidocr 根本 import 不到，是假阳性。现在做真 import 探测。
   //    另外 py3.10 的 venv 里 onnxruntime 会 "DLL load failed"，换 3.12 才正常，
   //    所以按候选顺序探测，报"哪个 venv 真的能跑"。
-  const ocrScript = join("D:\work", "tools", "ocr.py");
+  const ocrScript = join(WORKSPACE_DIR, "tools", "ocr.py");
   const ocrCandidates = [
-    join("D:\work", "tools", "ocr-venv312", "Scripts", "python.exe"),
-    join("D:\work", "tools", "ocr-venv", "Scripts", "python.exe"),
+    join(WORKSPACE_DIR, "tools", "ocr-venv312", "Scripts", "python.exe"),
+    join(WORKSPACE_DIR, "tools", "ocr-venv", "Scripts", "python.exe"),
   ];
   const probeOcr = (exe) => {
     try {
@@ -795,18 +950,18 @@ function checkLocalTools() {
 }
 
 // ============ SSOT 一致性审计（2026-10-29 新增） ============
-// 独立脚本 D:\work\自进化\audit_ssot.py 负责干活（约 50-60 秒，扫全工作区 3000+ 文件），
+// 独立脚本 E:\DS公作区\自进化\audit_ssot.py 负责干活（约 50-60 秒，扫全工作区 3000+ 文件），
 // 这里只做"入口 + 统一格式"，不把审计逻辑搬进本插件：
 //   ① 职能不同 —— 本插件查"环境/插件现在能不能用"，审计查"文档与代码说的一致不一致"；
 //   ② 耗时差 100 倍（0.5s vs 55s），并进 only=all 会把每次巡检拖慢；
 //   ③ 失败隔离 —— 审计脚本崩了不该连带大内总管整体失败。
-const SSOT_SCRIPT = join("D:\work", "自进化", "audit_ssot.py");
+const SSOT_SCRIPT = join(WORKSPACE_DIR, "自进化", "audit_ssot.py");
 const SSOT_PY = join(DSH_HOME, "dsh-runtimes", "dsh-plugin-desktop-primary-runtime", "dependencies", "python", "python.exe");
 
 function checkSsotAudit() {
   const out = [];
   if (!existsSync(SSOT_SCRIPT)) {
-    return [{ level: WARN, title: "SSOT 审计：脚本缺失", detail: SSOT_SCRIPT, fix: "恢复 D:\work\\自进化\\audit_ssot.py" }];
+    return [{ level: WARN, title: "SSOT 审计：脚本缺失", detail: SSOT_SCRIPT, fix: `恢复 ${WORKSPACE_DIR}\\自进化\\audit_ssot.py` }];
   }
   if (!existsSync(SSOT_PY)) {
     return [{ level: WARN, title: "SSOT 审计：找不到 python", detail: SSOT_PY, fix: "确认 dsh-plugin-desktop-primary-runtime 已安装" }];
@@ -830,7 +985,7 @@ function checkSsotAudit() {
       level: FAIL,
       title: "SSOT 审计：脚本执行失败",
       detail: briefError(e),
-      fix: `cd D:\work\\自进化; "${SSOT_PY}" audit_ssot.py`,
+      fix: `cd ${WORKSPACE_DIR}\\自进化; "${SSOT_PY}" audit_ssot.py`,
     }];
   }
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
@@ -1011,12 +1166,22 @@ function checkMiscAndMcp() {
     checks.push({ level: INFO, title: "插件包完整性", detail: briefError(e), fix: null });
   }
   // 2. OpenDesign MCP（依赖 OD daemon 端口 63256）
-  let odUp = false;
+  // 2026-11-05：open-design-mcp 插件已卸载（MCP server 从没连上、0 使用），源码目录保留可随时装回。
+  // 只有它真在 profile 的 bundles 里才检查——否则会永远报一条误导性的「open_design MCP 断开」。
+  let odInstalled = false;
   try {
-    const n = execFileSync(POWERSHELL_EXE, ["-NoProfile", "-NonInteractive", "-Command", "(Get-NetTCPConnection -LocalPort 63256 -ErrorAction SilentlyContinue | Measure-Object).Count"], { timeout: 15000, encoding: "utf8", windowsHide: true }).trim();
-    odUp = parseInt(n, 10) > 0;
+    const pkg = JSON.parse(readFileSync(PROFILE_PKG, "utf8"));
+    const bundles = (pkg?.dsh?.profile?.bundles ?? []).map(String);
+    odInstalled = bundles.some((b) => b.includes("open-design"));
   } catch {}
-  checks.push({ level: odUp ? OK : INFO, title: "OpenDesign MCP", detail: odUp ? "OD daemon 运行中（63256），open_design 工具可用" : "OD 未启动 → open_design MCP 断开（需要时启动 OpenDesign）", fix: null });
+  if (odInstalled) {
+    let odUp = false;
+    try {
+      const n = execFileSync(POWERSHELL_EXE, ["-NoProfile", "-NonInteractive", "-Command", "(Get-NetTCPConnection -LocalPort 63256 -ErrorAction SilentlyContinue | Measure-Object).Count"], { timeout: 15000, encoding: "utf8", windowsHide: true }).trim();
+      odUp = parseInt(n, 10) > 0;
+    } catch {}
+    checks.push({ level: odUp ? OK : INFO, title: "OpenDesign MCP", detail: odUp ? "OD daemon 运行中（63256），open_design 工具可用" : "OD 未启动 → open_design MCP 断开（需要时启动 OpenDesign）", fix: null });
+  }
   // 3. .dsh 数据体积（用 DSH_HOME，不能写死某个用户名）
   try {
     const dshHomePs = String(DSH_HOME).replace(/'/g, "''");
@@ -1041,7 +1206,7 @@ function checkMiscAndMcp() {
 
 function checkModelVersions() {
   const checks = [];
-  // LOCALAPPDATA 才是 Ollama 的默认安装位置；写死 ~ 换用户就查不到。
+  // LOCALAPPDATA 才是 Ollama 的默认安装位置；写死 C:\Users\Administrator 换用户就查不到。
   const OLLAMA_EXE = join(process.env.LOCALAPPDATA || join(HOME, "AppData", "Local"), "Programs", "Ollama", "ollama.exe");
 
   let localVer = "";
@@ -1098,7 +1263,9 @@ const TASK_RESULT_TEXT = {
   267009: "运行中",
   267010: "运行中（长任务）",
   267011: "尚未运行",
+  267014: "被用户终止",
   2147942404: "程序不存在",
+  2147946720: "被系统拒绝启动",
   3221225786: "被中断（Ctrl+C/任务被停止）",
 };
 const TASK_NEVER_BEFORE = Date.UTC(2000, 0, 1);
@@ -1124,12 +1291,12 @@ function taskStatus(t) {
 /**
  * 用户主动停用的任务不算故障，不该每轮报警。
  * 期望清单放数据文件，改配置不用改代码：
- *   D:\work\自进化\task-expectations.json
+ *   E:\DS公作区\自进化\task-expectations.json
  *   { "expectedDisabled": { "任务名": "为什么停用" } }
  * 只有"在清单里 + 状态 Disabled"才静音；新停掉的任务照旧报警。
  * 文件不存在/坏了 = 什么都不静音（fail-open 到"照旧报"，宁可吵也别漏）。
  */
-const TASK_EXPECTATIONS_FILE = join("D:\work", "自进化", "task-expectations.json");
+const TASK_EXPECTATIONS_FILE = join(WORKSPACE_DIR, "自进化", "task-expectations.json");
 let taskExpectCache = { mtime: -1, map: {} };
 function expectedDisabled(name) {
   try {
@@ -1259,8 +1426,6 @@ function checkDeep() {
 // 不登记的任务不会出现在覆盖统计里，但也不会被当成异常。
 const AUTOMATION_MAP = [
   { task: "DSH-Memory-Weekly-Iterate", plugins: ["dsh-memory"], purpose: "记忆插件每周复盘并自我迭代" },
-  { task: "DSH-Plugin-Iterate", plugins: ["dsh-ops", "billion-context"], purpose: "两个底座的配置体检 + 自动修复" },
-  { task: "DSH-Plugin-Check", plugins: ["dsh-ops", "billion-context"], purpose: "配置漂移与运行时一致性巡检" },
   { task: "DSH-EnvDoctor-Iterate", plugins: ["@local/dsh-env-doctor"], purpose: "大内总管每月自检并自我迭代" },
 ];
 
@@ -1331,7 +1496,14 @@ function checkAutomation() {
     const { code, never, state, desc, key } = taskStatus(t);
 
     if (state === "Disabled") {
-      out.push({ level: WARN, title: `自动化任务已禁用：${def.task}`, detail: `${def.purpose}｜${desc}`, fix: `schtasks /Change /TN "${def.task}" /ENABLE`, key });
+      const why = expectedDisabled(def.task);
+      if (why) {
+        // 和 checkTasks/checkAutoLearn 共用同一份用户主动停用清单：
+        // 已知停用只留 INFO 明细，不再单独报 WARN。
+        out.push({ level: INFO, title: `自动化任务已停用（已知）：${def.task}`, detail: `${def.purpose}｜${desc}｜停用原因：${why}`, fix: null, key });
+      } else {
+        out.push({ level: WARN, title: `自动化任务已禁用：${def.task}`, detail: `${def.purpose}｜${desc}`, fix: `schtasks /Change /TN "${def.task}" /ENABLE`, key });
+      }
     } else if (code === 267011 && never) {
       out.push({ level: INFO, title: `自动化任务 ${def.task} 尚未跑过`, detail: `${def.purpose}｜${desc}`, fix: `schtasks /Run /TN "${def.task}"`, key });
     } else if (code !== 0 && code !== 267009 && code !== 267010) {
@@ -1441,6 +1613,22 @@ async function checkPluginHealth() {
   let okCount = 0;
   let skipped = 0;
 
+  // 装了但没重启：包在本机的「出生时间」晚于本进程启动时间 → 运行中的 DSH 还没读过它。
+  // 用 birthtime 不用 mtime：从 npm 缓存/压缩包复制的文件会带着上游的旧 mtime（实测
+  // dsh-fail-guard 的 package.json mtime 是 1985-10-26），只有 birthtime 反映「什么时候落到这台机器上」。
+  const startedAt = Date.now() - Math.round(process.uptime() * 1000);
+  const pending = [];
+  for (const p of plugins) {
+    if (p.missing) continue;
+    try {
+      if (statSync(join(PROFILE_DIR, "node_modules", p.name, "package.json")).birthtimeMs > startedAt) {
+        pending.push(p.name);
+      }
+    } catch {
+      // 读不到不在这里判，下面会单独报「package.json 不可读」
+    }
+  }
+
   for (const p of plugins) {
     if (p.missing) {
       out.push({
@@ -1531,9 +1719,20 @@ async function checkPluginHealth() {
   out.unshift({
     level: brokenCount(out) ? WARN : OK,
     title: "插件加载自检",
-    detail: `${plugins.length} 个本地插件，${okCount} 个能正常加载${configOnly.length ? `（含 ${configOnly.length} 个纯配置 bundle，本来就没有 JS 入口）` : ""}${skipped ? `，${skipped} 个依赖 DSH 运行时（独立 import 跳过）` : ""}${brokenCount(out) ? `，${brokenCount(out)} 个有问题（见下）` : ""}`,
+    detail: `${plugins.length} 个本地插件，${okCount} 个能正常加载${configOnly.length ? `（含 ${configOnly.length} 个纯配置 bundle，本来就没有 JS 入口）` : ""}${skipped ? `，${skipped} 个依赖 DSH 运行时（独立 import 跳过）` : ""}${brokenCount(out) ? `，${brokenCount(out)} 个有问题（见下）` : ""}${pending.length ? `｜另有 ${pending.length} 个待重启生效` : ""}`,
     fix: null,
   });
+  // 装了但没重启：package.json 的 mtime 晚于本进程启动时间 → 运行中的 DSH 还没读过它。
+  // 2026-11-03 加：当天装完 dsh-fail-guard 后 env_doctor 仍只报 20 个插件，我没法判断
+  // 「是没装好」还是「装了没重启」，只能靠数个数去猜。这条直接把答案说出来。
+  if (pending.length) {
+    out.splice(1, 0, {
+      level: WARN,
+      title: "有待生效的插件（需重启 DSH）",
+      detail: `${pending.length} 个：${pending.join("、")}｜它们的 package.json 比本进程启动还新，说明装完还没重启`,
+      fix: "重启 DSH 后这些插件才会进加载名单（不影响当前会话，但工具/钩子要重启后才存在）",
+    });
+  }
   return out;
 }
 
@@ -1597,8 +1796,8 @@ function checkPluginRisk() {
   for (const name of names) {
     const spec = String(deps[name] ?? "");
     const dir = spec.startsWith("link:") ? spec.slice(5) : join(PROFILE_DIR, "node_modules", name);
-    // 自研插件（link 到 D:\work）不参与"第三方"风险扫描：自家代码，风险由迭代流程管
-    if (/^E:[\\/]DS公作区/i.test(String(dir))) continue;
+    // 自研插件（link 到工作区目录）不参与"第三方"风险扫描：自家代码，风险由迭代流程管
+    if (String(dir).replace(/\\/g, "/").toLowerCase().startsWith(WORKSPACE_DIR.replace(/\\/g, "/").toLowerCase())) continue;
     if (!existsSync(join(dir, "package.json"))) continue;
     scanned += 1;
     let p;
@@ -1702,7 +1901,7 @@ function locateBundleDir(name, deps) {
   return null;
 }
 
-function checkClientBundles() {
+export function checkClientBundles() {
   let pkg;
   try {
     pkg = readJson(PROFILE_PKG);
@@ -1743,15 +1942,47 @@ function checkClientBundles() {
     if (id !== m.name) { failed.push(`${name}：注册 id "${id}" ≠ 包名（图标/面板不会出现）`); continue; }
     clientOk.push(m.name);
   }
+  // 未启用的依赖也要查：这类插件平时不加载，等用户勾上那一刻才崩，界面直接打不开。
+  // 2026-11-13 事故：@un10086/dsh-chat-background 改了 scope，client.js 的注册 id
+  // 还留着无 scope 的旧名，它与包名不同 → client-modules 回落单资源 URL 再执行一遍
+  // → duplicate factory → web boot 失败，而 checkClientBundles 因为「未启用」没看到它。
+  const dormant = [];
+  const enabledSet = new Set(bundles);
+  for (const name of Object.keys(deps)) {
+    if (enabledSet.has(name) || name.startsWith("@deepseek-ai/")) continue;
+    try {
+      const dir = locateBundleDir(name, deps);
+      if (!dir) continue;
+      const m = readJson(join(dir, "package.json"));
+      if (!m?.dsh?.client) continue;
+      const exportsMap = m.exports;
+      const relRaw = exportsMap && typeof exportsMap === "object" ? exportsMap["./client"] : undefined;
+      if (relRaw === undefined) { dormant.push(`${name}：声明 dsh.client 但 exports 缺 "./client"（启用即崩）`); continue; }
+      let rel = relRaw;
+      if (rel && typeof rel === "object") rel = rel.default ?? rel.import ?? rel.require;
+      if (typeof rel !== "string") { dormant.push(`${name}：exports["./client"] 无法解析`); continue; }
+      const body = readFileSync(join(dir, rel), "utf8");
+      const mm = body.match(/__ModuleLoader__\.load\(\{\s*id:\s*['"]([^'"]+)['"]/);
+      const id = mm ? mm[1] : "";
+      if (!id) { dormant.push(`${name}：client 未找到 ModuleLoader.load({id})`); continue; }
+      if (id !== m.name) dormant.push(`${name}：注册 id "${id}" ≠ 包名（启用即崩：duplicate factory）`);
+    } catch { /* 单包读失败不影响整组 */ }
+  }
   if (bundles.length === 0) {
     return [{ level: WARN, title: "bundle 清单为空", detail: PROFILE_PKG, fix: null }];
   }
   if (failed.length === 0) {
+    const dormantItem = dormant.length === 0 ? [] : [{
+      level: WARN,
+      title: `未启用插件有 ${dormant.length} 个启用即崩的风险`,
+      detail: dormant.join("；"),
+      fix: "改 client.js 的 ModuleLoader.load id 必须等于 package.json 的 name（不是 cordis.patch.yml 的 entry id）",
+    }];
     return [{
       level: OK,
       title: "客户端 bundle 一致性",
       detail: `${bundles.length} 个 bundle 入口全部可解析${builtinCount ? `（其中 ${builtinCount} 个 DSH 内置）` : ""}，${clientOk.length} 个带浏览器端 bundle 且注册 id 与包名一致`,
-    }];
+    }, ...dormantItem];
   }
   return [{
     level: FAIL,
@@ -1927,10 +2158,14 @@ let guardLastSlow = 0;
 function checkAutoLearn() {
   const out = [];
   const taskName = "DSH-Auto-Learn";
-  const logPath = join("D:\work", "学习计划", "auto-learn-log.txt");
+  const logPath = join(WORKSPACE_DIR, "学习计划", "auto-learn-log.txt");
   const tasks = readScheduledTasks();
   const t = tasks.get(taskName);
   if (!t) {
+    // 2026-11-08：三个任务已按计划删除（见 自进化/task-expectations.json），
+    // 但这里只查「存在与否」不查「是否已知退役」→ 删掉之后天天报 WARN。
+    // 判据：检查器要跟「东西还在不在」一起改，别让尺子量一把已经不存在的尺。
+    if (expectedDisabled(taskName)) return out;
     out.push({ level: WARN, title: `自动学习任务未注册：${taskName}`, detail: "自主编程学习没挂到计划任务，开机不会自动学", fix: "重新注册 DSH-Auto-Learn（LogonTrigger + auto-learn-loop.ps1）", key: "autolearn:task-missing" });
     return out;
   }
@@ -2099,7 +2334,12 @@ function guardSummary() {
     .slice(0, 6)
     .map((a) => `- [${a.level}] ${a.title}`);
   const more = guardAlerts.size > 6 ? `\n- ……另有 ${guardAlerts.size - 6} 条` : "";
-  return `\n\n【大内总管后台巡检告警 ${guardAlerts.size} 条，最近巡检 ${fmtTime(guardLastRun)}】\n${items.join("\n")}${more}\n有告警先调 env_doctor only=all 看详情；要清掉告警需要先排除原因。`;
+  // 2026-11-13 缓存稳定性改造：删掉「最近巡检 ${fmtTime(guardLastRun)}」。
+  // 根因：这段文本经 systemPrompt.section 进 system prompt，巡检每 30 分钟刷新一次
+  // guardLastRun → 时间戳变 → 整份 prompt 重算 → bili 记一次 prompt rewrite（实测本会话
+  // 相邻 system/message 的 diff 里就有它）。告警集合本身的变化是必要变化，保留；
+  // 「什么时候巡检的」由 env_doctor 输出里给，不放系统提示。
+  return `\n\n【大内总管后台巡检告警 ${guardAlerts.size} 条】\n${items.join("\n")}${more}\n有告警先调 env_doctor only=all 看详情；要清掉告警需要先排除原因。`;
 }
 
 export const apply = (ctx, config) => {
@@ -2136,11 +2376,11 @@ export const apply = (ctx, config) => {
   ctx.tools.register({
     name: "env_doctor",
     description:
-      "大内总管（Env Doctor）：一条命令把 DSH 的运行状态查清楚。默认查工作区沙箱前置、billion-context sidecar 是否重读配置、目录可写性、计划任务是否还活着；only=changes 查插件增减/升级（自动与上次基线对比，装任何插件都会被它发现）；only=plugins 查全部 bundle 的版本与缺失；only=health 逐个插件验证入口能不能真的 import（揪出界面显示正常、实际已经装坏的插件）；only=automation 看每个插件被哪些定时任务覆盖；only=tools 查自研插件目录（动态发现）/Ollama/OCR/ffmpeg/包完整性；only=ssot 跑数据腐化审计（文档里的参数与代码真值、知识库索引、依赖声明、死代码/死链、残留文件，约 1 分钟，不在 all 里跑）；only=version 查模型版本升级；deep=true 复用 check.mjs 跑全量 11 项。异常项都带可直接执行的修复命令，fix=true 会自动修安全项（建目录等），危险操作（改 owner/杀进程）永远只给命令。",
+      "大内总管（Env Doctor）：一条命令把 DSH 的运行状态查清楚。默认查工作区沙箱前置、billion-context sidecar 是否重读配置、目录可写性、计划任务是否还活着；only=changes 查已安装插件的增减/升级（自动与上次基线对比；DSH 内置 bundle 不计）；only=plugins 查全部 bundle 的版本与缺失；only=health 逐个插件验证入口能不能真的 import（揪出界面显示正常、实际已经装坏的插件）；only=automation 看每个插件被哪些定时任务覆盖；only=tools 查自研插件目录（动态发现）/Ollama/OCR/ffmpeg/包完整性；only=ssot 跑数据腐化审计（文档里的参数与代码真值、知识库索引、依赖声明、死代码/死链、残留文件，约 1 分钟，不在 all 里跑）；only=version 查模型版本升级；deep=true 复用 check.mjs 跑全量 11 项。异常项都带可直接执行的修复命令，fix=true 会自动修安全项（建目录等），危险操作（改 owner/杀进程）永远只给命令。",
     parameters: {
       type: "object",
       properties: {
-        workspace: { type: "string", description: "要检查的工作区绝对路径，默认配置里的 D:\work。" },
+        workspace: { type: "string", description: "要检查的工作区绝对路径，默认当前工作目录。" },
         only: {
           type: "string",
           enum: ["all", "workspace", "bili", "paths", "plugins", "tasks", "automation", "health", "inventory", "tools", "ssot", "version", "changes", "bundles"],
@@ -2166,9 +2406,9 @@ export const apply = (ctx, config) => {
       if (only === "all" || only === "bili") checks = checks.concat(checkBili());
       if (only === "all" || only === "paths") checks = checks.concat(checkPaths());
       if (only === "all" || only === "tasks") checks = checks.concat(checkTasks(only === "tasks"));
-      if (only === "all") checks = checks.concat(checkMemories(), checkPluginDirs(), checkPluginDrift(), checkClientBundles(), checkDisk(), checkConfigDrift(), checkToolchain(), checkLocalTools(), checkModelVersions(), checkMiscAndMcp());
+      if (only === "all") checks = checks.concat(checkMemories(), checkPluginDirs(), checkPluginDrift(), checkSourceVersionSync(), checkClientBundles(), checkDisk(), checkConfigDrift(), checkToolchain(), checkLocalTools(), checkModelVersions(), checkMiscAndMcp());
       if (only === "tools") checks = checks.concat(checkLocalTools(), checkMiscAndMcp());
-      if (only === "changes") checks = checks.concat(checkPluginDrift(), checkClientBundles());
+      if (only === "changes") checks = checks.concat(checkPluginDrift(), checkSourceVersionSync(), checkClientBundles());
       if (only === "bundles") checks = checks.concat(checkClientBundles());
       if (only === "version") checks = checks.concat(checkModelVersions());
       if (only === "plugins") checks = checks.concat(await checkPlugins({ noNetwork }), checkPluginRisk());
