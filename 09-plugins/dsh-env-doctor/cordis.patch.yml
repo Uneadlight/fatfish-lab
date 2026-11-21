@@ -1,0 +1,10 @@
+# dsh-env-doctor —— DSH bundle patch
+#
+# 把插件挂进当前 profile 的配置树；`name` 必须与 package.json 的 name 完全一致。
+# 不带 config 时，工具默认检查「调用时所在的工作目录」；
+# 想固定成某个目录，可加：
+#   config:
+#     workspace: 'D:\your-workspace'
+- insert:
+    - id: dsh-env-doctor
+      name: "@un10086/dsh-env-doctor"
