@@ -69,7 +69,7 @@ env_doctor({fix: true})               # 自动修安全项
 
 - **30 分钟快检**：workspace/bili/paths/memories/pluginDirs/**pluginDrift**/disk/configDrift/autolearn（发现异常才出声）
 - **6 小时慢检**：计划任务/自动化覆盖/工具链/插件版本（health、inventory、tools、version 仍按需调用，避免每 6 小时重复 import 全部插件）
-- **插件变更追踪（v0.6.0）**：每次巡检对比 `.plugin-snapshot.json` 基线，自动发现**新增/移除/版本变化**的插件（自研、第三方、市场装的都算），新插件会自动提示跑 `only=health` 验货
+- **插件变更追踪（v0.6.0）**：每次巡检对比 `.plugin-snapshot.json` 基线，自动发现**新增/移除/版本变化**的插件（自研、第三方、市场装的都算；`@deepseek-ai/*` 内置 bundle 随 DSH 本体更新，不计入），新插件会自动提示跑 `only=health` 验货
 - **定时任务**：`DSH-Plugin-Check` 每天跑一次全量；`DSH-EnvDoctor-Iterate` 每月自检
 - **自动修复**：学习循环挂了自动 `Start-ScheduledTask` 拉起；安全项（建目录）自动修
 
@@ -78,9 +78,9 @@ env_doctor({fix: true})               # 自动修安全项
 ## 四、文件位置
 
 ```
-D:\work\dsh-env-doctor\
-├── index.js              # 插件主代码（约 1500 行）
-├── package.json          # 版本/描述（0.5.1，大内总管）
+E:\DS公作区\dsh-env-doctor\
+├── index.js              # 插件主代码（约 2200 行）
+├── package.json          # 版本/描述（0.6.14，大内总管）
 ├── locale/zh.json        # 中文显示名（大内总管）
 ├── locale/en.json        # 英文显示名（Grand Steward）
 ├── cordis.patch.yml      # 插件挂载配置
