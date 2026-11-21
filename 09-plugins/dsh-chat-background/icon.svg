@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Chat Background">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d5be3"/>
+      <stop offset="1" stop-color="#8fb7ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="10" width="56" height="44" rx="9" fill="url(#sky)"/>
+  <circle cx="21" cy="25" r="6" fill="#fff4c2"/>
+  <path d="M4 46 L20 32 L32 43 L44 28 L60 44 L60 45 A9 9 0 0 1 51 54 L13 54 A9 9 0 0 1 4 45 Z" fill="#1d3f9e"/>
+  <path d="M4 46 L20 32 L32 43 L44 28 L60 44" fill="none" stroke="#dbe7ff" stroke-width="2" stroke-linejoin="round" opacity=".55"/>
+  <rect x="4" y="10" width="56" height="44" rx="9" fill="none" stroke="#ffffff" stroke-width="2" opacity=".6"/>
+</svg>
