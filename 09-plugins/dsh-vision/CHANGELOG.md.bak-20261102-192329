@@ -1,0 +1,6 @@
+## 2026-10-26 v0.2.0（Ollama 按需启动）
+
+- 背景：用户不希望 Ollama 常驻占内存。
+- 改动：callOllama 前调用 ensureOllama()——1.2s 探测 /api/tags，没在跑就 spawn ollama.exe serve（detached/stdio ignore/windowsHide），随后 300ms×50 轮轮询端口就绪（最多 15s）。可用 DSH_VISION_OLLAMA_EXE / DSH_VISION_OLLAMA_URL 覆盖。
+- 效果：智谱 API 主路径完全不碰 Ollama；只有兜底或 mode=local 才启动本地模型。
+- 验证：node --check 通过。
