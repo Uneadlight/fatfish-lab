@@ -1,0 +1,56 @@
+{
+  "name": "@un10086/dsh-chat-background",
+  "version": "0.3.0",
+  "description": "给 DeepSeek Harness 聊天界面设置自定义背景：纯色或图片，浅色/深色各自独立；内置 Wallpaper Engine 壁纸库，可直接挑选任意一张已下载壁纸作为对话背景（动态壁纸自动生成静态封面）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "background",
+    "wallpaper",
+    "wallpaper-engine",
+    "theme"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png"
+  },
+  "files": [
+    "lib",
+    "tools",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "author": "Uneadlight",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Uneadlight/fatfish-lab.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Uneadlight/fatfish-lab/issues"
+  },
+  "homepage": "https://github.com/Uneadlight/fatfish-lab#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  }
+}
