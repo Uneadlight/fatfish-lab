@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Grand Steward",
+    "description": "Plugin steward for this profile: a resident background patrol starts with the Harness and re-checks workspace permissions, the billion-context sidecar, and key directory writability every 30 minutes, speaking up only on faults. Plus in-session diagnosis of faults that survive a restart, per-plugin load verification, and scheduled-task coverage."
+  }
+}
