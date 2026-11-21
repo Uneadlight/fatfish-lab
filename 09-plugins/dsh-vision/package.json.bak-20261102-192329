@@ -1,0 +1,23 @@
+{
+  "name": "@local/dsh-vision",
+  "version": "0.2.0",
+  "description": "大肥鱼的本地识图插件：Ollama + Qwen2.5-VL（RTX 4060 GPU 加速），看图描述、提取文字、回答图片问题",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "vision",
+    "ocr"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
