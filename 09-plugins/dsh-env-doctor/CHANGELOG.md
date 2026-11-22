@@ -1,5 +1,12 @@
 # dsh-env-doctor 变更日志
 
+## v0.6.24（2026-11-22）新增「ComfyUI 本地生图服务」检查项：生图链路也是本地工具链的一环
+
+- 背景：候选 `ev-1795251758036`。本机 ComfyUI 是本地生图（SDXL/LoRA/表情包/放大）的唯一入口，但此前巡检只查 Ollama / RapidOCR / ffmpeg，ComfyUI 坏了要等真正要生图时才发现。2026-11-21 那轮修 ComfyUI（torch 矩阵 + 4 组补丁）就是「没有检查项 → 坏了一整天才发现」的实例。
+- 改法：`checkLocalTools()` 里 Ollama 之后插入「2.5) ComfyUI 本地生图服务」——①`WORKSPACE_DIR/ComfyUI` 目录存在；②`curl http://127.0.0.1:8188/system_stats` 探服务（`--max-time 4`），在线报 OK 并从 `"comfyui_version"` 取版本，不在线报 INFO「未启动（按需启动）」、fix 指向 `知识库\绘图\03-ComfyUI-GPU环境修复.md`。**故意不在这里 import torch 探 CUDA**：那要 5-15 秒，会把 `only=all` 拖慢；「服务能起」本身就是 torch 2.6.0+cu124 + comfy_kitchen 补丁整条链路通的证据。
+- 验证：`node --check index.js` → `SYNTAX OK`；`python -c "import json;json.load(open('package.json'))"` → OK；`node selftest.mjs all` → 见运行记录。**需重启 DSH 生效**（`link:` 安装，进程内是启动时 import 的旧模块）。
+- 判据：**巡检只查「能不能发现」，不查「跑得动跑不动」**——重探测（torch / 模型加载）留给真正要用的时候；巡检的价值是「坏了能第一时间看见」，不是「每次体检都跑一遍全量基准」。
+
 ## v0.6.23（2026-11-20）记忆库阈值翻倍：用户 m05927「阈值有点低…都翻倍一下…提高到一个以后很长时间都不用理他的一个上线」
 
 - 背景：巡检报「记忆库该净化了」两条——5/5 字符 64,996 > 26,000、总条数 288 > 260。用户认为阈值太低，要求提到「长期不用理」的程度（不是靠降重要性让告警消失）。

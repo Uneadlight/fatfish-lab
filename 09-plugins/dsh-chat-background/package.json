@@ -1,6 +1,6 @@
 {
   "name": "@un10086/dsh-chat-background",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "给 DeepSeek Harness 聊天界面设置自定义背景：纯色或图片，浅色/深色各自独立；内置 Wallpaper Engine 壁纸库，可直接挑选任意一张已下载壁纸作为对话背景（动态壁纸自动生成静态封面）。",
   "keywords": [
     "dsh",

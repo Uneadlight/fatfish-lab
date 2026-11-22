@@ -876,6 +876,50 @@ function checkLocalTools() {
   }
   if (!ollamaOk) out.push({ level: INFO, title: "本地工具：Ollama 可选", detail: "不装也能用智谱 API 通道" });
 
+  // 2.5) ComfyUI 本地生图服务（按需启动、不常驻；巡检只查可发现性，不跑重探测）
+  //    2026-11-22 加（候选 ev-1795251758036）：目录 + 8188 在线状态。
+  //    不在这里 import torch 探 CUDA——那要 5-15 秒，会把 only=all 拖慢；
+  //    「服务能起」本身就是整条链路（torch 2.6.0+cu124 + comfy_kitchen 补丁）通的证据。
+  const comfyRoot = join(WORKSPACE_DIR, "ComfyUI");
+  if (!existsSync(comfyRoot)) {
+    out.push({
+      level: WARN,
+      title: "本地工具：ComfyUI 目录缺失",
+      detail: comfyRoot,
+      fix: "恢复 ComfyUI 目录（本地生图/表情包/放大都走它）",
+    });
+  } else {
+    let comfyUp = false;
+    let comfyVer = "";
+    try {
+      const raw = String(
+        execFileSync("curl", ["-s", "--max-time", "4", "http://127.0.0.1:8188/system_stats"], {
+          timeout: 8000,
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+      );
+      comfyUp = raw.includes("system");
+      if (comfyUp) {
+        const m = raw.match(/"comfyui_version"\s*:\s*"([^"]+)"/);
+        if (m) comfyVer = m[1];
+      }
+    } catch {
+      comfyUp = false;
+    }
+    if (comfyUp) {
+      out.push({ level: OK, title: "本地工具：ComfyUI 服务", detail: `8188 在线${comfyVer ? "（v" + comfyVer + "）" : ""}，GPU 生图可用` });
+    } else {
+      out.push({
+        level: INFO,
+        title: "本地工具：ComfyUI 未启动（按需启动）",
+        detail: "不常驻、不占显存；生图时 lab img serve --background",
+        fix: "启动失败先看 知识库\\绘图\\03-ComfyUI-GPU环境修复.md（torch/补丁/内存红线）",
+      });
+    }
+  }
+
   // 3) 智谱视觉 key
   const keyFile = join(DSH_HOME, "dsh-vision-key.txt");
   try {

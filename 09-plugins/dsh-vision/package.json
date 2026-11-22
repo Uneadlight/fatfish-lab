@@ -1,6 +1,10 @@
 {
   "name": "@un10086/dsh-vision",
+<<<<<<< HEAD
   "version": "0.2.2",
+=======
+  "version": "0.2.3",
+>>>>>>> 9a44567 (chore(plugins): sync fixed sources (env-doctor 0.6.24, vision 0.2.3, chat-background 0.3.1) and add OIDC publish workflow)
   "description": "看图理解：智谱 GLM-4V 优先（快、旗舰质量），本地 Ollama Qwen2.5-VL 兜底（离线）。只数图标/认小字请用 read_image 直看，不必花一次 API。",
   "license": "MIT",
   "author": "Uneadlight",

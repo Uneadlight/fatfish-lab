@@ -1,0 +1,52 @@
+name: publish-npm
+
+# Publishes a plugin from 09-plugins/ to npm using OIDC Trusted Publishing.
+# No npm token, no OTP: npm trusts this workflow because the package's
+# "Trusted Publisher" setting names this repository + workflow file.
+#
+# Setup (once per package, on npmjs.com):
+#   Package -> Settings -> Publishing access -> Configure trusted publisher
+#     Organization or user : Uneadlight
+#     Repository           : fatfish-lab
+#     Workflow filename    : publish-npm.yml
+#     Environment          : (leave empty)
+#
+# Usage: Actions -> publish-npm -> Run workflow -> pick the package.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pkg:
+        description: "Package directory under 09-plugins/"
+        required: true
+        type: choice
+        options:
+          - dsh-env-doctor
+          - dsh-vision
+          - dsh-chat-background
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Show package identity
+        working-directory: 09-plugins/${{ inputs.pkg }}
+        run: |
+          node -e "const p=require('./package.json');console.log(p.name, p.version)"
+          echo '--- cordis.patch.yml ---'
+          cat cordis.patch.yml
+
+      - name: Publish via trusted publishing
+        working-directory: 09-plugins/${{ inputs.pkg }}
+        run: npm publish --provenance --access public
