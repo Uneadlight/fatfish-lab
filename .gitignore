@@ -13,6 +13,10 @@ home-*/
 *.idx
 *.log
 
+# 同步源目录时误带的备份文件（2026-11-23：7 天内 11 次 remove backup file）
+*.bak
+*.bak-*
+
 # 模型权重（体积大，不入库）
 models/*.gguf
 
