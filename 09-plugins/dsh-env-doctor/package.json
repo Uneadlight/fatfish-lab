@@ -27,10 +27,6 @@
     "README.md",
     "LICENSE"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Uneadlight/fatfish-lab.git"
-  },
   "bugs": {
     "url": "https://github.com/Uneadlight/fatfish-lab/issues"
   },
