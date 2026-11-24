@@ -15,11 +15,14 @@
  * 运行：node test/client.test.mjs
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const entry = join(here, '..', 'lib', 'client.js')
+// 包名跟着 package.json 走，避免改名后测试还写旧值
+const PKG_NAME = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).name
 
 const STORE_KEY = 'dsh-chat-background:config'
 const RUNTIME_STYLE_ID = 'dsh-chat-background/runtime.css'
@@ -458,7 +461,9 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 await import(pathToFileURL(entry).href)
 
 assert.ok(captured !== null, 'ModuleLoader.load 没被调用')
-assert.equal(captured.id, 'dsh-chat-background', 'ModuleLoader id 必须是 loader entry 名')
+// 包名跟着 package.json 走（2026-11-24）：从 dsh-chat-background 改成 @un10086/dsh-chat-background
+// 之后这条断言没跟着改，一直红着。
+assert.equal(captured.id, PKG_NAME, 'ModuleLoader id 必须是 loader entry 名')
 
 const mod = captured.factory((name) => {
   if (name === 'react') return fakeReact

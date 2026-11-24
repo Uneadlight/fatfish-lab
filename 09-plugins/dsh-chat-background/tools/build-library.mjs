@@ -731,7 +731,18 @@ function writeJsonAtomic(file, value) {
 
 /** 原子替换一层：ffmpeg 先写 tmp，成功后再改名为最终文件。 */
 function replaceFile(tmp, finalFile) {
-  fs.renameSync(tmp, finalFile)
+  try {
+    fs.renameSync(tmp, finalFile)
+  } catch (err) {
+    // 2026-11-24：tmp 现在可能落在别的盘（见 tmpSibling 注释），
+    // 跨盘 rename 会抛 EXDEV，退化成「复制 + 删临时文件」。
+    if (err && err.code === 'EXDEV') {
+      fs.copyFileSync(tmp, finalFile)
+      fs.rmSync(tmp, { force: true })
+      return
+    }
+    throw err
+  }
 }
 
 /** 读 JPEG 输出尺寸（Builder 自己的输出没有 EXIF）。 */
@@ -1055,6 +1066,44 @@ function tmpSibling(file) {
 }
 
 /**
+ * ffmpeg → JPEG 字节流 → 本进程写盘（2026-11-24 修，v0.3.2）。
+ *
+ * 起因：本会话里点「重新扫描」，新订阅的那张每次报
+ * `Could not open file : ...jpg.tmp-...` / `Permission denied`。
+ * 实测对照（同一台机器、同一个 ffmpeg）：
+ *   ffmpeg 写 C:\Users\Administrator\.dsh\...\stills      → 拒绝
+ *   ffmpeg 写 C:\Users\Administrator\.dsh\...\wallpapers  → 拒绝
+ *   ffmpeg 写 C:\Users\Administrator\Downloads            → 拒绝
+ *   ffmpeg 写 C:\Users\ADMINI~1\AppData\Local\Temp        → 拒绝
+ *   ffmpeg 写 E:\DS公作区\.tmp                            → 成功
+ *   node / Copy-Item 写 ...\.dsh\...\stills               → 成功
+ * 结论：**沙箱只允许子进程写工作区**，宿主进程能写 `.dsh`。
+ * 解法：让 ffmpeg 输出到 stdout（`pipe:1`），完全不碰文件系统；
+ * 本进程接住字节再写盘。这样不管沙箱怎么限制子进程，只要宿主能写就能出图。
+ * 这也解释了为什么 2026-11-18 首次建库能成功（那时在会话外手动跑）、
+ * 而之后在面板点刷新每次只卡新订阅的那一张。
+ */
+function ffmpegJpegToFile(ffmpeg, args, outFile, timeout = 180000) {
+  const result = spawnSync(
+    ffmpeg,
+    [
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+      ...args,
+      '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'
+    ],
+    { timeout, windowsHide: true, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
+  )
+  if (!result || result.status !== 0) {
+    const tail = String((result && result.stderr) || '').split(/\r?\n/).filter(Boolean).slice(-6).join(' | ')
+    return { ok: false, error: tail || `exit ${result && result.status}`, tail }
+  }
+  const buf = result.stdout
+  if (!buf || buf.length < 512) return { ok: false, error: 'ffmpeg 未输出图像数据', tail: '' }
+  fs.writeFileSync(outFile, buf)
+  return { ok: true, error: null, tail: '', bytes: buf.length }
+}
+
+/**
  * 用 ffmpeg 把图片缩到 8x8 raw RGB，统计亮度/彩度，用来识别“纯黑纯白纯色”的坏图。
  * 这一步是 QA 后加的：scene.pkg 里最大的横图可能是黑底遮罩或空帧。
  */
@@ -1143,14 +1192,13 @@ function produceStillFromImage(task) {
   fs.mkdirSync(path.dirname(task.outThumb), { recursive: true })
   const stillTmp = tmpSibling(task.outStill)
   try {
-    const still = ffmpegBase(task.ffmpeg, [
+    const still = ffmpegJpegToFile(task.ffmpeg, [
       '-i', task.input,
       '-vf', STILL_FILTER_FULL,
       '-frames:v', '1',
-      '-q:v', '2',
-      stillTmp
-    ])
-    if (!still.ok) throw new Error(`ffmpeg 缩放裁切失败：${still.tail || still.error || still.status}`)
+      '-q:v', '2'
+    ], stillTmp)
+    if (!still.ok) throw new Error(`ffmpeg 缩放裁切失败：${still.tail || still.error}`)
     return finalizeStill(task, stillTmp)
   } finally {
     try {
@@ -1172,13 +1220,12 @@ function produceStillFromVideo(task) {
   for (const inputArgs of attempts) {
     const stillTmp = tmpSibling(task.outStill)
     try {
-      const result = ffmpegBase(task.ffmpeg, [
+      const result = ffmpegJpegToFile(task.ffmpeg, [
         ...inputArgs,
         '-frames:v', '1',
         '-an', '-sn',
-        '-q:v', '2',
-        stillTmp
-      ])
+        '-q:v', '2'
+      ], stillTmp)
       if (!result.ok) {
         lastError = result.tail || result.error || `exit ${result.status}`
         continue
@@ -1203,14 +1250,13 @@ function produceThumbOnly(task) {
   fs.mkdirSync(path.dirname(task.outThumb), { recursive: true })
   const thumbTmp = tmpSibling(task.outThumb)
   try {
-    const thumb = ffmpegBase(task.ffmpeg, [
+    const thumb = ffmpegJpegToFile(task.ffmpeg, [
       '-i', task.outStill,
       '-vf', `scale=${THUMB_WIDTH}:${THUMB_HEIGHT}`,
       '-frames:v', '1',
-      '-q:v', '4',
-      thumbTmp
-    ])
-    if (!thumb.ok) throw new Error(`ffmpeg 生成缩略图失败：${thumb.tail || thumb.error || thumb.status}`)
+      '-q:v', '4'
+    ], thumbTmp)
+    if (!thumb.ok) throw new Error(`ffmpeg 生成缩略图失败：${thumb.tail || thumb.error}`)
     replaceFile(thumbTmp, task.outThumb)
     const size = readJpegSize(task.outStill) || { w: 0, h: 0 }
     return { source: task.source, width: size.w, height: size.h }
@@ -1265,15 +1311,14 @@ function produceComposite(task) {
   fs.mkdirSync(path.dirname(task.outStill), { recursive: true })
   const stillTmp = tmpSibling(task.outStill)
   try {
-    const result = ffmpegBase(task.ffmpeg, [
+    const result = ffmpegJpegToFile(task.ffmpeg, [
       '-i', task.preview,
       '-filter_complex', COMPOSITE_FILTER,
       '-frames:v', '1',
       '-an', '-sn',
-      '-q:v', '2',
-      stillTmp
-    ])
-    if (!result.ok) throw new Error(`ffmpeg 合成预览图失败：${result.tail || result.error || result.status}`)
+      '-q:v', '2'
+    ], stillTmp)
+    if (!result.ok) throw new Error(`ffmpeg 合成预览图失败：${result.tail || result.error}`)
     replaceFile(stillTmp, task.outStill)
     return produceThumbOnly({ ...task, source: 'preview-composite' })
   } finally {

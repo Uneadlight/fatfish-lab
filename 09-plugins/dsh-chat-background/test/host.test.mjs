@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-chat-background — Host 半侧测试
  * ----------------------------------------------------------------------------
  * 不连真实 DSH：用 stub ctx（webServer.register 收集路由、connection.requestRejection
@@ -20,6 +20,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(here, '..')
+// 版本断言跟着 package.json 走（2026-11-24 修）：写死 '0.3.0' 时每次升版本都要改测试，
+// 上次升到 0.3.1 忘了改，两条用例就一直红着，掩盖了真正的问题。
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version
 
 /* ============================================================================
  * 临时环境：DSH_HOME / DSH_CHAT_BG_CACHE 必须在 import 插件之前设好
@@ -295,7 +298,7 @@ await test('config GET 返回默认配置', async () => {
   assert.equal(res.statusCode, 200)
   const body = res.json()
   assert.equal(body.ok, true)
-  assert.equal(body.version, '0.3.0')
+  assert.equal(body.version, PKG_VERSION)
   assert.deepEqual(body.config, {
     enabled: false,
     mode: 'color',
@@ -369,7 +372,7 @@ await test('wallpapers 返回 counts/build/items/图片 URL', async () => {
   assert.equal(res.statusCode, 200)
   const body = res.json()
   assert.equal(body.ok, true)
-  assert.equal(body.version, '0.3.0')
+  assert.equal(body.version, PKG_VERSION)
   assert.deepEqual(body.counts, { total: 2, scene: 1, video: 1, web: 0, other: 0, built: 2 })
   assert.equal(body.build.state, 'done')
   assert.equal(body.build.message, '构建完成')
