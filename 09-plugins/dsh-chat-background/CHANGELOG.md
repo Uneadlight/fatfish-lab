@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3（2026-11-25）
+
+- 修复：`package.json` 补回 `repository` 字段（指向 `Uneadlight/fatfish-lab`）。此前为了市场 tarball 安装路径，仓库副本删掉了该字段，源码也跟着没写，导致 npm 上 0.3.2 的元数据缺少回链，市场站点的 `probe-npm.mjs` 认不到，从而退回 tarball 安装。
+- 无功能改动（0.3.2 的 ffmpeg 管道修复保持不变）。
+
 ## 0.3.2 — 2026-11-24
 
 **修复：动态壁纸封面在受限环境里生成失败（`Permission denied`）。**
