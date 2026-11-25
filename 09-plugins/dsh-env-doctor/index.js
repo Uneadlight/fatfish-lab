@@ -362,7 +362,7 @@ function checkMemories() {
   // 后者由下面的 `LIMIT_INJECT_EST` 管。所以放宽它不会让成本失控，只是把「该不该清理」
   // 从「一超就报」变成「超额才报」。真正要盯的是 injectEst 那条线。
   const LIMIT_CHARS = 600000; // 2026-11-20 用户要求翻倍 300,000 → 600,000
-  const LIMIT_INJECT_EST = 96000;
+  const LIMIT_INJECT_EST = 128000; // 2026-11-23：预算 120,000→160,000（80% 报警线 96,000→128,000）；先净化再加，见 dsh-memory/lib/index.js 的 CHAR_BUDGET 注释
   const INDEX_LINE_CHARS = 80;
   // 2026-11-18：dsh-memory v0.6.17 起 5/5 全文注入加了**条数上限**（`MAX_FIVES_INJECT`，默认 18，
   // env `DSH_MEMORY_MAX_FIVES` 可覆盖），且 `pinned: true` 的 5/5 **优先注入、不参与 updatedAt 竞争**。
@@ -878,9 +878,12 @@ function checkLocalTools() {
 
   // 2.5) ComfyUI 本地生图服务（按需启动、不常驻；巡检只查可发现性，不跑重探测）
   //    2026-11-22 加（候选 ev-1795251758036）：目录 + 8188 在线状态。
+  //    2026-11-23 加固：「目录在」不等于「能启动」——先查 main.py；在线判据从
+  //    includes("system") 改成 JSON 里的 system 对象，顺带报 GPU 型号/显存。
   //    不在这里 import torch 探 CUDA——那要 5-15 秒，会把 only=all 拖慢；
   //    「服务能起」本身就是整条链路（torch 2.6.0+cu124 + comfy_kitchen 补丁）通的证据。
   const comfyRoot = join(WORKSPACE_DIR, "ComfyUI");
+  const comfyMain = join(comfyRoot, "main.py");
   if (!existsSync(comfyRoot)) {
     out.push({
       level: WARN,
@@ -888,9 +891,17 @@ function checkLocalTools() {
       detail: comfyRoot,
       fix: "恢复 ComfyUI 目录（本地生图/表情包/放大都走它）",
     });
+  } else if (!existsSync(comfyMain)) {
+    out.push({
+      level: WARN,
+      title: "本地工具：ComfyUI 目录在但 main.py 缺失",
+      detail: comfyRoot + "（目录存在不等于能启动）",
+      fix: "从备份恢复 ComfyUI\\main.py 或重装；恢复后 lab img serve --background 验证",
+    });
   } else {
     let comfyUp = false;
     let comfyVer = "";
+    let comfyGpu = "";
     try {
       const raw = String(
         execFileSync("curl", ["-s", "--max-time", "4", "http://127.0.0.1:8188/system_stats"], {
@@ -900,16 +911,26 @@ function checkLocalTools() {
           stdio: ["ignore", "pipe", "pipe"],
         })
       );
-      comfyUp = raw.includes("system");
-      if (comfyUp) {
-        const m = raw.match(/"comfyui_version"\s*:\s*"([^"]+)"/);
-        if (m) comfyVer = m[1];
+      const data = JSON.parse(raw || "{}");
+      if (data && data.system && typeof data.system === "object") {
+        comfyUp = true;
+        if (data.system.comfyui_version) comfyVer = String(data.system.comfyui_version);
+        const dev = Array.isArray(data.devices) ? data.devices[0] : null;
+        if (dev && dev.name) {
+          comfyGpu = String(dev.name);
+          const vram = Number(dev.vram_total || 0);
+          if (vram > 0) comfyGpu += " / " + Math.round(vram / 1024 ** 3) + "GB";
+        }
       }
     } catch {
       comfyUp = false;
     }
     if (comfyUp) {
-      out.push({ level: OK, title: "本地工具：ComfyUI 服务", detail: `8188 在线${comfyVer ? "（v" + comfyVer + "）" : ""}，GPU 生图可用` });
+      out.push({
+        level: OK,
+        title: "本地工具：ComfyUI 服务",
+        detail: `8188 在线${comfyVer ? "（v" + comfyVer + "）" : ""}${comfyGpu ? " · " + comfyGpu : ""}，GPU 生图可用`,
+      });
     } else {
       out.push({
         level: INFO,

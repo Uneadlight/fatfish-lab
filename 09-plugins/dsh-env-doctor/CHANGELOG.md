@@ -1,5 +1,13 @@
 # dsh-env-doctor 变更日志
 
+## v0.6.25（2026-11-23）ComfyUI 检查加固：目录在 ≠ 能启动，在线判据改成解析 JSON
+
+- 背景：v0.6.24 给候选 `ev-1795251758036` 加了 ComfyUI 检查，但「目录存在」只证明文件夹在——`main.py` 被移走/目录被掏空时仍会报 INFO「未启动（按需启动）」，把「不能启动」伪装成「按需可启动」；在线判据 `raw.includes("system")` 也太松，8188 上任何带 system 字样的响应都会被当成 ComfyUI。
+- 改法：①目录在之后先查 `ComfyUI/main.py`，缺失报 WARN 并给恢复路径；②`/system_stats` 按 JSON 解析，必须真有 `system` 对象才算在线；③在线时顺带报 `devices[0].name` 与 `vram_total`（GB），一眼能看出是不是 GPU 在跑。
+- 验证：`node --check index.js` 通过；`node selftest.mjs tools` 未启动态 → INFO 正常；临时在 8188 起假 `/system_stats`（v0.3.99 / FAKE GPU 24GB）→ 输出 `8188 在线（v0.3.99）· FAKE GPU / 24GB`，解析路径通过；`node selftest.mjs all --no-network` 见运行记录。
+- 判据：**检查项的证据要落在它能证明的那一层**——目录只证明文件在，`main.py` 证明能启动，HTTP JSON 才证明服务活着。三层分开报，失败时才知道该修哪层。
+- 注意：`link:` 安装，**需重启 DSH 生效**。
+
 ## v0.6.24（2026-11-22）新增「ComfyUI 本地生图服务」检查项：生图链路也是本地工具链的一环
 
 - 背景：候选 `ev-1795251758036`。本机 ComfyUI 是本地生图（SDXL/LoRA/表情包/放大）的唯一入口，但此前巡检只查 Ollama / RapidOCR / ffmpeg，ComfyUI 坏了要等真正要生图时才发现。2026-11-21 那轮修 ComfyUI（torch 矩阵 + 4 组补丁）就是「没有检查项 → 坏了一整天才发现」的实例。
