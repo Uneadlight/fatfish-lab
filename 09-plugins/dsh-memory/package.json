@@ -1,6 +1,6 @@
 {
   "name": "dsh-memory",
-  "version": "0.4.9",
+  "version": "0.6.21",
   "description": "为 DeepSeek Harness 的长期记忆库：跨会话保存、搜索、列出、遗忘记忆，并在系统提示中自动注入最重要的记忆；侧边栏提供「记忆库」入口与可视化页面。",
   "keywords": [
     "dsh",
