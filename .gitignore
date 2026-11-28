@@ -24,3 +24,8 @@ models/*.gguf
 .stress/
 # Windows 保留设备名，git 会误列但打不开（2026-11-19）
 CON
+
+# coverage 数据文件
+.coverage
+.coverage.*
+htmlcov/

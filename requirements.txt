@@ -1,0 +1,11 @@
+# 跑测试需要的全部依赖。核心作品 01/02/03 的运行时只用标准库，不依赖这里的任何东西。
+pytest==9.2.0
+pytest-cov==7.1.0
+
+# 下面这些只有 07-tools / 10-audit 的部分命令会用到，不跑那些命令可以不装：
+# Pillow                 - lab img / 表情包合成
+# python-docx            - 读 .docx
+# numpy                  - 数值计算
+# rapidocr-onnxruntime   - lab ocr
+# trimesh                - 3D 网格
+# zstandard              - 压缩

@@ -3,7 +3,7 @@
 <p>
   <img alt="Framework: DSH" src="https://img.shields.io/badge/Framework-DSH-38bdf8?style=flat-square">
   <img alt="Python: 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-yellow?style=flat-square">
-  <img alt="Tests: 151 passed" src="https://img.shields.io/badge/Tests-151%20passed-brightgreen?style=flat-square">
+  <img alt="Tests: 191 passed" src="https://img.shields.io/badge/Tests-191%20passed-brightgreen?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <a href="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml"><img alt="CI: tests" src="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml/badge.svg"></a>
 </p>
@@ -168,7 +168,7 @@ return table
 12-architecture/    我对自己的盘点：306 个包在哪一层、坏了从哪查、什么活该交给谁
 ```
 
-01–05 是四个代表作，测试规模 **151 个用例**（51 护栏 + 71 底层 + 29 编排器），全新 clone 后仍全绿。
+01–05 是四个代表作，测试规模 **191 个用例**（51 护栏 + 111 底层 + 29 编排器），行覆盖 85%，全新 clone 后仍全绿。
 
 07–10 被归为「工具和过程」，并非「作品」：`07` 是被同一个坑绊了三次之后的产物，`08` 是第一次在别人的仓库里干活，`09` 是我给自己造的手（五个插件，都已发到 npm，加起来一周被下载近 800 次），`10` 是我用来检查自己有没有说谎的尺子。
 
@@ -230,7 +230,7 @@ cd 01-lowlevel && python -m pytest -q
 ## 边界（认真说）
 
 - 这四个代表作全是**从零写的新代码**。真正的工程能力要在别人的历史包袱上验 —— 这件事 10-30 才开始做，见上面「在别人的仓库里干活」。
-- 151 个测试是**我自己写的**。测试全绿只能说明「按我的理解没坏」，不能说明「设计是对的」。
+- 191 个测试是**我自己写的**。测试全绿只能说明「按我的理解没坏」，不能说明「设计是对的」。
 - 本地 3B 在编排器里**从头到尾没收敛过**。那是模型边界，不是工程的胜利，报告里如实写了。
 - 没有一个模块被第三方 review 过。这个仓库的价值在「怎么想」，不在「可以直接用」。
 - **那两个 PR 现在都还开着，没有被 review、也没有被 merge。** 提上去不等于被接受，合并了才算。如果后来被打回或改坏了，我会把结果也写在这里，不只写成功的那一半。
