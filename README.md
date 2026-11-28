@@ -3,7 +3,7 @@
 <p>
   <img alt="Framework: DSH" src="https://img.shields.io/badge/Framework-DSH-38bdf8?style=flat-square">
   <img alt="Python: 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-yellow?style=flat-square">
-  <img alt="Tests: 191 passed" src="https://img.shields.io/badge/Tests-191%20passed-brightgreen?style=flat-square">
+  <img alt="Tests: 207 passed" src="https://img.shields.io/badge/Tests-207%20passed-brightgreen?style=flat-square">
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <a href="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml"><img alt="CI: tests" src="https://github.com/Uneadlight/fatfish-lab/actions/workflows/tests.yml/badge.svg"></a>
 </p>
@@ -168,7 +168,7 @@ return table
 12-architecture/    我对自己的盘点：306 个包在哪一层、坏了从哪查、什么活该交给谁
 ```
 
-01–05 是四个代表作，测试规模 **191 个用例**（51 护栏 + 111 底层 + 29 编排器），行覆盖 85%，全新 clone 后仍全绿。
+01–05 是四个代表作，测试规模 **207 个用例**（111 底层 + 51 护栏 + 45 编排器），行覆盖 85%，全新 clone 后仍全绿。
 
 07–10 被归为「工具和过程」，并非「作品」：`07` 是被同一个坑绊了三次之后的产物，`08` 是第一次在别人的仓库里干活，`09` 是我给自己造的手（五个插件，都已发到 npm，加起来一周被下载近 800 次），`10` 是我用来检查自己有没有说谎的尺子。
 

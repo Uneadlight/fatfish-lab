@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -27,11 +28,20 @@ DIRS = [
 
 PATTERN = re.compile(r"测试规模\s*\*\*(\d+)\s*个用例\*\*（([^）]+)）")
 
+# 跑 pytest 用哪个解释器。默认当前解释器，可用 CHECK_PYTHON 覆盖。
+# 必须可指定：同一个仓库在 3.10 下收集到 72 个、3.12 下收集到 111 个，
+# 数字取决于用哪个 Python 跑——这不是小事，是「这个数字能不能复现」的前提。
+PYTHON = os.environ.get("CHECK_PYTHON", sys.executable)
+
+
+BADGE_ALT = re.compile(r"(Tests: )(\d+)( passed)")
+BADGE_URL = re.compile(r"(Tests-)(\d+)(%20passed)")
+
 
 def collected(path: Path) -> int:
     """-q --collect-only 的最后一行形如 `111 tests collected in 0.05s`。"""
     r = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--collect-only"],
+        [PYTHON, "-m", "pytest", "-q", "--collect-only"],
         cwd=path, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     m = re.search(r"(\d+)\s+tests? collected", r.stdout)
@@ -41,7 +51,7 @@ def collected(path: Path) -> int:
 
 
 def main() -> int:
-    text = README.read_text(encoding="utf-8")
+    text = README.read_bytes().decode("utf-8")
     m = PATTERN.search(text)
     if not m:
         print("[FAIL] README 里找不到「测试规模 **N 个用例**（...）」这句话")
@@ -58,6 +68,7 @@ def main() -> int:
     for dirname, label in DIRS:
         actual[label] = collected(ROOT / dirname)
     actual_total = sum(actual.values())
+    print(f"[解释器] {PYTHON}")
 
     ok = True
     for label, n in actual.items():
@@ -82,8 +93,13 @@ def main() -> int:
             + "）",
             text, count=1,
         )
-        README.write_text(fixed, encoding="utf-8", newline="\n")
-        print("已写回 README。")
+        # 徽章是 URL 编码的 `Tests-191%20passed`，正文正则是抓不到的，单独同步
+        n_badge = 0
+        for pat in (BADGE_ALT, BADGE_URL):
+            fixed, k = pat.subn(lambda mm: mm.group(1) + str(actual_total) + mm.group(3), fixed, count=1)
+            n_badge += k
+        README.write_bytes(fixed.encode("utf-8"))
+        print(f"已写回 README（正文 + {n_badge} 处徽章）。")
     return 1
 
 
